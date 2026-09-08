@@ -60,11 +60,13 @@ func (u *App) start() {
 	u.cancel = cancel
 	client := llm.New(cfg)
 	illustrations := u.optIllust.Checked
+	emptyAs := u.optEmptyIllust.Checked
 	go func() {
 		res, err := pipeline.Run(ctx, pipeline.Request{
-			Slides:        slides,
+			Snapshot:      u.doc.Snapshot,
 			Prompt:        promptText,
 			Illustrations: illustrations,
+			EmptyAsImages: emptyAs,
 			PDQThreshold:  dedup.DefaultPDQThreshold,
 			Recognizer:    client,
 			SetStatus: func(id string, status session.Status, detail string) {
@@ -163,7 +165,7 @@ func (u *App) writeOutput() error {
 	if dir == "" {
 		return errors.New("выберите папку сохранения на вкладке Распознавание")
 	}
-	slides := append([]markdown.Slide(nil), u.result...)
+	slides := append([]markdown.Slide(nil), u.orderedResult()...)
 	if counted(slides) == 0 {
 		return errors.New("ещё нет готовых слайдов")
 	}
@@ -211,12 +213,14 @@ func (u *App) rerecognize(id string) {
 	u.cancel = cancel
 	client := llm.New(cfg)
 	illustrations := u.optIllust.Checked
+	emptyAs := u.optEmptyIllust.Checked
 	go func() {
 		md, err := pipeline.RecognizeOne(ctx, pipeline.OneRequest{
 			Slide:         s,
 			Index:         idx,
 			Prompt:        promptText,
 			Illustrations: illustrations,
+			EmptyAsImages: emptyAs,
 			Recognizer:    client,
 			SetStatus: func(sid string, status session.Status, detail string) {
 				u.doc.SetStatus(sid, status, detail)

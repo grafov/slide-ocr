@@ -18,7 +18,7 @@ const (
 	// MaxPreviewSide is the longest edge of the right-click preview dialog.
 	MaxPreviewSide = 1600
 	// MaxHoverSide is the longest edge of the RMB-hold hover card.
-	MaxHoverSide = 640
+	MaxHoverSide = 768
 	jpegQual     = 85
 )
 

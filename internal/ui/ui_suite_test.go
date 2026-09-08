@@ -33,3 +33,15 @@ var _ = Describe("hasUnsaved", func() {
 		Expect(hasUnsaved(slides, map[string]bool{"1": true})).To(BeTrue())
 	})
 })
+
+var _ = Describe("orderByDoc", func() {
+	It("follows snapshot ids", func() {
+		result := []markdown.Slide{
+			{ID: "b", Text: "two"},
+			{ID: "a", Text: "one"},
+		}
+		got := markdown.OrderByIDs([]string{"a", "b"}, result)
+		Expect(got[0].ID).To(Equal("a"))
+		Expect(got[1].ID).To(Equal("b"))
+	})
+})

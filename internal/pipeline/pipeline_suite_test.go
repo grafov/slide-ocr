@@ -169,6 +169,82 @@ var _ = Describe("Run", func() {
 		Eventually(done).Should(BeClosed())
 		Expect(last).To(Equal(session.StatusPending))
 	})
+
+	It("picks the new top pending slide after reorder", func() {
+		dir := GinkgoT().TempDir()
+		p1 := filepath.Join(dir, "a.png")
+		p2 := filepath.Join(dir, "b.png")
+		p3 := filepath.Join(dir, "c.png")
+		Expect(imaging.Save(patterned(0), p1)).To(Succeed())
+		Expect(imaging.Save(patterned(1), p2)).To(Succeed())
+		Expect(imaging.Save(patterned(2), p3)).To(Succeed())
+		slides := []session.Slide{
+			{ID: "a", Path: p1, Name: "a.png", Included: true},
+			{ID: "b", Path: p2, Name: "b.png", Included: true},
+			{ID: "c", Path: p3, Name: "c.png", Included: true},
+		}
+		rec := &idRec{}
+		_, err := pipeline.Run(context.Background(), pipeline.Request{
+			Snapshot: func() []session.Slide {
+				out := make([]session.Slide, len(slides))
+				copy(out, slides)
+				return out
+			},
+			Prompt:       "x",
+			PDQThreshold: 0,
+			Recognizer:   rec,
+			OnSlide: func(s markdown.Slide) {
+				if rec.n.Load() == 1 {
+					slides = []session.Slide{slides[2], slides[1], slides[0]}
+				}
+				_ = s
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rec.ids).To(Equal([]string{"a", "c", "b"}))
+	})
+
+	It("skips a pending duplicate of a Done slide below it", func() {
+		dir := GinkgoT().TempDir()
+		p1 := filepath.Join(dir, "a.png")
+		p2 := filepath.Join(dir, "b.png")
+		Expect(imaging.Save(patterned(0), p1)).To(Succeed())
+		Expect(imaging.Save(patterned(0), p2)).To(Succeed())
+		rec := &stubRec{}
+		res, err := pipeline.Run(context.Background(), pipeline.Request{
+			Slides: []session.Slide{
+				{ID: "2", Path: p2, Name: "b.png", Included: true},
+				{ID: "1", Path: p1, Name: "a.png", Included: true, Status: session.StatusDone, Text: "уже готово"},
+			},
+			Prompt:       "x",
+			PDQThreshold: 0,
+			Recognizer:   rec,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(int(rec.n.Load())).To(Equal(0))
+		Expect(res.Slides[0].Skip).To(BeTrue())
+		Expect(res.Slides[1].Text).To(Equal("уже готово"))
+	})
+
+	It("marks empty OCR as NoText and can embed the full slide", func() {
+		dir := GinkgoT().TempDir()
+		p1 := filepath.Join(dir, "a.png")
+		Expect(imaging.Save(patterned(0), p1)).To(Succeed())
+		rec := &emptyRec{}
+		res, err := pipeline.Run(context.Background(), pipeline.Request{
+			Slides: []session.Slide{
+				{ID: "1", Path: p1, Name: "a.png", Included: true},
+			},
+			Prompt:        "x",
+			EmptyAsImages: true,
+			PDQThreshold:  0,
+			Recognizer:    rec,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.Slides[0].NoText).To(BeTrue())
+		Expect(res.Slides[0].Text).To(ContainSubstring("![Нет текста]"))
+		Expect(res.Slides[0].Assets).NotTo(BeEmpty())
+	})
 })
 
 type gateRec struct {
@@ -198,6 +274,43 @@ func (c *cancelRec) Recognize(ctx context.Context, _ image.Image, _ string, _ bo
 	return "", ctx.Err()
 }
 
+type idRec struct {
+	n   atomic.Int32
+	ids []string
+}
+
+func (r *idRec) Recognize(_ context.Context, img image.Image, _ string, _ bool, _ *imageutil.AssetStore) (string, error) {
+	r.n.Add(1)
+	id := patternID(img)
+	r.ids = append(r.ids, id)
+	switch id {
+	case "a":
+		return "Текст слайда альфа достаточно длинный чтобы не схлопнуться.", nil
+	case "c":
+		return "Тема про сети и маршрутизацию пакетов в другой лекции.", nil
+	default:
+		return "Совсем отдельный сюжет про базы данных и транзакции.", nil
+	}
+}
+
+func patternID(img image.Image) string {
+	r1, _, _, _ := img.At(200, 50).RGBA()
+	r2, _, _, _ := img.At(50, 200).RGBA()
+	if r1 > 0x8000 && r2 < 0x8000 {
+		return "a"
+	}
+	if r2 > 0x8000 && r1 < 0x8000 {
+		return "b"
+	}
+	return "c"
+}
+
+type emptyRec struct{}
+
+func (emptyRec) Recognize(_ context.Context, _ image.Image, _ string, _ bool, _ *imageutil.AssetStore) (string, error) {
+	return "   ", nil
+}
+
 func patterned(kind int) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, 256, 256))
 	for y := 0; y < 256; y++ {
@@ -205,8 +318,10 @@ func patterned(kind int) *image.NRGBA {
 			on := false
 			if kind == 0 {
 				on = y < 128
-			} else {
+			} else if kind == 1 {
 				on = x < 128
+			} else {
+				on = x+y < 200
 			}
 			v := uint8(0)
 			if on {

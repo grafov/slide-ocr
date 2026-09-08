@@ -30,6 +30,7 @@ const (
 	prefEN      = "lang.en"
 	prefExtra   = "lang.extra"
 	prefIllust  = "opt.illustrations"
+	prefEmptyAs = "opt.emptyasimages"
 	prefTables  = "opt.tables"
 	prefStyles  = "opt.styles"
 	prefFrag    = "opt.fragments"
@@ -66,22 +67,23 @@ type App struct {
 	promptDirty bool
 	rebuilding  bool
 
-	urlEntry    *widget.Entry
-	keyEntry    *widget.Entry
-	modelEntry  *widget.Entry
-	modelSelect *widget.Select
-	reasonChk   *widget.Check
-	effortSel   *widget.Select
-	tempEntry   *widget.Entry
-	tokensEntry *widget.Entry
-	langRU      *widget.Check
-	langEN      *widget.Check
-	langExtra   *widget.Entry
-	optIllust   *widget.Check
-	optTables   *widget.Check
-	optStyles   *widget.Check
-	optFrag     *widget.Check
-	outDirEntry *widget.Entry
+	urlEntry       *widget.Entry
+	keyEntry       *widget.Entry
+	modelEntry     *widget.Entry
+	modelSelect    *widget.Select
+	reasonChk      *widget.Check
+	effortSel      *widget.Select
+	tempEntry      *widget.Entry
+	tokensEntry    *widget.Entry
+	langRU         *widget.Check
+	langEN         *widget.Check
+	langExtra      *widget.Entry
+	optIllust      *widget.Check
+	optEmptyIllust *widget.Check
+	optTables      *widget.Check
+	optStyles      *widget.Check
+	optFrag        *widget.Check
+	outDirEntry    *widget.Entry
 
 	outMode       *widget.RadioGroup
 	outPreview    *widget.Entry

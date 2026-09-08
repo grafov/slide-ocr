@@ -76,6 +76,58 @@ func PlanVisual(imgs []image.Image, threshold int) []Decision {
 	return out
 }
 
+// VisualKeep is an incremental PDQ index of frames already kept.
+type VisualKeep struct {
+	pdq  imghash.PDQ
+	kept []imghash.Hash
+}
+
+// NewVisualKeep constructs a PDQ hasher for live dedup.
+func NewVisualKeep() (*VisualKeep, error) {
+	p, err := imghash.NewPDQ()
+	if err != nil {
+		return nil, err
+	}
+	return &VisualKeep{pdq: p}, nil
+}
+
+// Remember adds img to the set of kept frames.
+func (v *VisualKeep) Remember(img image.Image) {
+	if v == nil || img == nil {
+		return
+	}
+	h, err := v.pdq.Calculate(img)
+	if err != nil {
+		return
+	}
+	v.kept = append(v.kept, h)
+}
+
+// Duplicate reports whether img is a near-duplicate of a kept frame.
+func (v *VisualKeep) Duplicate(img image.Image, threshold int) (bool, int) {
+	if v == nil || img == nil {
+		return false, 0
+	}
+	if threshold <= 0 {
+		threshold = DefaultPDQThreshold
+	}
+	h, err := v.pdq.Calculate(img)
+	if err != nil {
+		return false, 0
+	}
+	for _, prev := range v.kept {
+		dist, cerr := v.pdq.Compare(h, prev)
+		if cerr != nil {
+			continue
+		}
+		d := int(dist + 0.5)
+		if d <= threshold {
+			return true, d
+		}
+	}
+	return false, 0
+}
+
 // MergeOverlapping keeps the fuller of two consecutive near-duplicate OCR texts.
 func MergeOverlapping(texts []string) []string {
 	if len(texts) == 0 {

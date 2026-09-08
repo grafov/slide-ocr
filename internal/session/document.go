@@ -30,6 +30,8 @@ const (
 	StatusRunning Status = "running"
 	// StatusDone means recognition finished successfully.
 	StatusDone Status = "done"
+	// StatusNoText means the VLM returned no lecture text.
+	StatusNoText Status = "notext"
 	// StatusError means recognition failed for this file.
 	StatusError Status = "error"
 )
@@ -241,6 +243,22 @@ func (d *Document) SetIncluded(id string, included bool) {
 				d.slides[i].Detail = ""
 			}
 		}
+		return
+	}
+}
+
+// MarkNoText marks a slide as empty OCR: yellow status, dropped from the work queue.
+func (d *Document) MarkNoText(id, text string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := range d.slides {
+		if d.slides[i].ID != id {
+			continue
+		}
+		d.slides[i].Included = false
+		d.slides[i].Status = StatusNoText
+		d.slides[i].Detail = "Нет текста"
+		d.slides[i].Text = text
 		return
 	}
 }

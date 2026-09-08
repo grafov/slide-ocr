@@ -61,7 +61,7 @@ type hoverLayerRenderer struct {
 }
 
 func (r *hoverLayerRenderer) Layout(size fyne.Size) {
-	ms := fyne.NewSize(360, 240)
+	ms := fyne.NewSize(432, 288)
 	if cmin := r.layer.card.MinSize(); cmin.Width > ms.Width {
 		ms.Width = cmin.Width
 	}
@@ -88,7 +88,7 @@ func (r *hoverLayerRenderer) Destroy() {}
 func (u *App) buildHoverCard() {
 	u.hoverImg = canvas.NewImageFromResource(theme.FileImageIcon())
 	u.hoverImg.FillMode = canvas.ImageFillContain
-	u.hoverImg.SetMinSize(fyne.NewSize(360, 240))
+	u.hoverImg.SetMinSize(fyne.NewSize(432, 288))
 	u.hoverLabel = widget.NewLabel("")
 	u.hoverLabel.Truncation = fyne.TextTruncateEllipsis
 	inner := container.NewBorder(u.hoverLabel, nil, nil, nil, u.hoverImg)

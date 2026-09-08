@@ -39,6 +39,7 @@ func (u *App) buildRecognizeControls() {
 	u.langExtra.SetPlaceHolder("другие языки через запятую")
 	u.langExtra.OnChanged = func(string) { u.onPromptOptions(false) }
 	u.optIllust = widget.NewCheck("Включать иллюстрации", u.onPromptOptions)
+	u.optEmptyIllust = widget.NewCheck("Вставлять пустые слайды как иллюстрации", nil)
 	u.optTables = widget.NewCheck("Распознавать таблицы", u.onPromptOptions)
 	u.optStyles = widget.NewCheck("Выделение стилей", u.onPromptOptions)
 	u.optFrag = widget.NewCheck("Дополнять обрывки", u.onPromptOptions)
@@ -80,7 +81,7 @@ func (u *App) recognizeTab() fyne.CanvasObject {
 		widget.NewFormItem("Temperature", u.tempEntry),
 		widget.NewFormItem("Max tokens", u.tokensEntry),
 		widget.NewFormItem("Языки", container.NewVBox(container.NewHBox(u.langRU, u.langEN), u.langExtra)),
-		widget.NewFormItem("Опции", container.NewVBox(u.optIllust, u.optTables, u.optStyles, u.optFrag)),
+		widget.NewFormItem("Опции", container.NewVBox(u.optIllust, u.optEmptyIllust, u.optTables, u.optStyles, u.optFrag)),
 		widget.NewFormItem("Папка сохранения", container.NewBorder(nil, nil, nil, browseDir, u.outDirEntry)),
 	)
 	mid := container.NewVScroll(container.NewVBox(form, rebuild, widget.NewLabel("Итоговый промпт")))
@@ -168,6 +169,7 @@ func (u *App) loadPrefs() {
 	u.langEN.SetChecked(p.BoolWithFallback(prefEN, true))
 	u.langExtra.SetText(p.String(prefExtra))
 	u.optIllust.SetChecked(p.BoolWithFallback(prefIllust, false))
+	u.optEmptyIllust.SetChecked(p.BoolWithFallback(prefEmptyAs, false))
 	u.optTables.SetChecked(p.BoolWithFallback(prefTables, true))
 	u.optStyles.SetChecked(p.BoolWithFallback(prefStyles, true))
 	u.optFrag.SetChecked(p.BoolWithFallback(prefFrag, false))
@@ -187,6 +189,7 @@ func (u *App) savePrefs() {
 	p.SetBool(prefEN, u.langEN.Checked)
 	p.SetString(prefExtra, u.langExtra.Text)
 	p.SetBool(prefIllust, u.optIllust.Checked)
+	p.SetBool(prefEmptyAs, u.optEmptyIllust.Checked)
 	p.SetBool(prefTables, u.optTables.Checked)
 	p.SetBool(prefStyles, u.optStyles.Checked)
 	p.SetBool(prefFrag, u.optFrag.Checked)

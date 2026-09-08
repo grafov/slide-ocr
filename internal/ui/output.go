@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/grafov/slide-ocr/internal/markdown"
+	"github.com/grafov/slide-ocr/internal/session"
 )
 
 func (u *App) outputTab() fyne.CanvasObject {
@@ -21,7 +22,7 @@ func (u *App) outputTab() fyne.CanvasObject {
 	u.outToggle = widget.NewButton("Показать весь текст", u.toggleOutView)
 	u.outMode.OnChanged = func(_ string) {
 		if !u.showFragments {
-			u.outPreview.SetText(markdown.Stitch(u.result, u.currentMode()))
+			u.outPreview.SetText(markdown.Stitch(u.orderedResult(), u.currentMode()))
 		}
 	}
 	u.fragBox = container.NewVBox()
@@ -97,7 +98,7 @@ func (u *App) setFragmentsView(fragments bool) {
 		u.outToggle.SetText("Показать фрагменты")
 		u.fragScroll.Hide()
 		u.outPreview.Show()
-		u.outPreview.SetText(markdown.Stitch(u.result, u.currentMode()))
+		u.outPreview.SetText(markdown.Stitch(u.orderedResult(), u.currentMode()))
 	}
 	if u.outBody != nil {
 		u.outBody.Refresh()
@@ -105,8 +106,10 @@ func (u *App) setFragmentsView(fragments bool) {
 }
 
 func (u *App) applySlide(s markdown.Slide) {
-	if idx, ok := u.doc.IndexByID(s.ID); ok {
-		if sl, ok := u.doc.At(idx); ok && !sl.Included {
+	if s.NoText {
+		u.doc.MarkNoText(s.ID, s.Text)
+	} else if idx, ok := u.doc.IndexByID(s.ID); ok {
+		if sl, ok := u.doc.At(idx); ok && !sl.Included && sl.Status != session.StatusNoText {
 			s.Skip = true
 			s.Text = ""
 			s.Assets = nil
@@ -125,8 +128,11 @@ func (u *App) applySlide(s markdown.Slide) {
 	}
 	if s.Skip {
 		delete(u.saved, s.ID)
+	} else if s.NoText {
+		u.saved[s.ID] = false
 	} else if strings.TrimSpace(s.Text) != "" {
 		u.saved[s.ID] = false
+		u.doc.SetIncluded(s.ID, true)
 		u.doc.SetText(s.ID, s.Text)
 	}
 	u.syncOutput()
@@ -147,7 +153,16 @@ func (u *App) syncOutput() {
 		}
 		return
 	}
-	u.outPreview.SetText(markdown.Stitch(u.result, u.currentMode()))
+	u.outPreview.SetText(markdown.Stitch(u.orderedResult(), u.currentMode()))
+}
+
+func (u *App) orderedResult() []markdown.Slide {
+	snap := u.doc.Snapshot()
+	ids := make([]string, len(snap))
+	for i, s := range snap {
+		ids[i] = s.ID
+	}
+	return markdown.OrderByIDs(ids, u.result)
 }
 
 func (u *App) rebuildFragments() {
@@ -156,36 +171,83 @@ func (u *App) rebuildFragments() {
 	}
 	u.fragRows = nil
 	objs := make([]fyne.CanvasObject, 0)
+	snap := u.doc.Snapshot()
+	byID := make(map[string]markdown.Slide, len(u.result))
 	for _, s := range u.result {
-		if s.Skip || strings.TrimSpace(s.Text) == "" {
+		byID[s.ID] = s
+	}
+	n := len(snap)
+	for i, sl := range snap {
+		md, ok := byID[sl.ID]
+		if !showFragment(sl, md, ok) {
 			continue
 		}
-		if idx, ok := u.doc.IndexByID(s.ID); ok {
-			if sl, ok := u.doc.At(idx); ok && !sl.Included {
-				continue
+		if !ok {
+			md = markdown.Slide{ID: sl.ID, Name: sl.Name, Text: sl.Text, NoText: sl.Status == session.StatusNoText}
+		}
+		if sl.Status == session.StatusNoText {
+			md.NoText = true
+			if md.Name == "" {
+				md.Name = sl.Name
 			}
 		}
-		row := u.newFragmentRow(s)
-		u.fragRows = append(u.fragRows, fragItem{id: s.ID, obj: row})
+		row := u.newFragmentRow(md, i, n)
+		u.fragRows = append(u.fragRows, fragItem{id: sl.ID, obj: row})
 		objs = append(objs, row)
 	}
 	u.fragBox.Objects = objs
 	u.fragBox.Refresh()
 }
 
-func (u *App) newFragmentRow(s markdown.Slide) fyne.CanvasObject {
+func showFragment(sl session.Slide, md markdown.Slide, ok bool) bool {
+	if sl.Status == session.StatusSkipped {
+		return false
+	}
+	if sl.Status == session.StatusNoText {
+		return true
+	}
+	if !ok || md.Skip || strings.TrimSpace(md.Text) == "" {
+		return false
+	}
+	return sl.Included
+}
+
+func (u *App) newFragmentRow(s markdown.Slide, index, n int) fyne.CanvasObject {
 	id := s.ID
 	name := widget.NewHyperlink(s.Name, nil)
 	name.OnTapped = func() { u.jumpToInput(id) }
 	redo := widget.NewButton("Распознать заново", func() { u.rerecognize(id) })
-	head := container.NewBorder(nil, nil, name, redo)
-	text := widget.NewMultiLineEntry()
-	text.Wrapping = fyne.TextWrapWord
-	text.Scroll = container.ScrollNone
-	text.SetText(s.Text)
-	text.SetMinRowsVisible(fragmentMinRows(s.Text))
-	text.Disable()
-	return container.NewBorder(head, nil, nil, nil, text)
+	up := widget.NewButtonWithIcon("", theme.MoveUpIcon(), func() {
+		u.doc.SwapAdjacent(index, false)
+		u.onInputOrderChanged()
+	})
+	down := widget.NewButtonWithIcon("", theme.MoveDownIcon(), func() {
+		u.doc.SwapAdjacent(index, true)
+		u.onInputOrderChanged()
+	})
+	if index == 0 {
+		up.Disable()
+	}
+	if index >= n-1 {
+		down.Disable()
+	}
+	var title fyne.CanvasObject = name
+	if s.NoText {
+		mark := widget.NewLabel("Нет текста")
+		mark.Importance = widget.WarningImportance
+		title = container.NewHBox(name, mark)
+	}
+	head := container.NewBorder(nil, nil, title, container.NewHBox(up, down, redo))
+	body := widget.NewMultiLineEntry()
+	body.Wrapping = fyne.TextWrapWord
+	body.Scroll = container.ScrollNone
+	body.SetText(s.Text)
+	body.SetMinRowsVisible(fragmentMinRows(s.Text))
+	body.Disable()
+	if strings.TrimSpace(s.Text) == "" {
+		body.Hide()
+	}
+	return container.NewBorder(head, nil, nil, nil, body)
 }
 
 func fragmentMinRows(text string) int {

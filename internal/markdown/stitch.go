@@ -36,6 +36,7 @@ type Slide struct {
 	Text   string
 	Assets []imageutil.Asset
 	Skip   bool
+	NoText bool
 }
 
 // Stitch builds a single markdown document according to mode.

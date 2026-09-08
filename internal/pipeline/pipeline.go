@@ -30,8 +30,10 @@ type Progress struct {
 // Request is a full recognition run.
 type Request struct {
 	Slides        []session.Slide
+	Snapshot      func() []session.Slide
 	Prompt        string
 	Illustrations bool
+	EmptyAsImages bool
 	PDQThreshold  int
 	Recognizer    Recognizer
 	OnProgress    func(Progress)
@@ -45,6 +47,7 @@ type OneRequest struct {
 	Index         int
 	Prompt        string
 	Illustrations bool
+	EmptyAsImages bool
 	Recognizer    Recognizer
 	SetStatus     func(id string, status session.Status, detail string)
 }
@@ -54,12 +57,46 @@ type Result struct {
 	Slides []markdown.Slide
 }
 
+type runState struct {
+	status   map[string]session.Status
+	included map[string]bool
+	text     map[string]string
+}
+
+func newRunState() *runState {
+	return &runState{
+		status:   map[string]session.Status{},
+		included: map[string]bool{},
+		text:     map[string]string{},
+	}
+}
+
+func (st *runState) apply(s session.Slide) session.Slide {
+	if v, ok := st.status[s.ID]; ok {
+		s.Status = v
+	}
+	if v, ok := st.included[s.ID]; ok {
+		s.Included = v
+	}
+	if v, ok := st.text[s.ID]; ok {
+		s.Text = v
+	}
+	return s
+}
+
+func (st *runState) setStatus(id string, status session.Status, detail string, hook func(string, session.Status, string)) {
+	st.status[id] = status
+	if hook != nil {
+		hook(id, status, detail)
+	}
+}
+
 // ShouldProcess reports whether the slide still needs a VLM call.
 func ShouldProcess(s session.Slide) bool {
 	if !s.Included {
 		return false
 	}
-	if s.Status == session.StatusSkipped {
+	if s.Status == session.StatusSkipped || s.Status == session.StatusNoText {
 		return false
 	}
 	if s.Status == session.StatusDone && strings.TrimSpace(s.Text) != "" {
@@ -68,126 +105,248 @@ func ShouldProcess(s session.Slide) bool {
 	return true
 }
 
+func (req Request) rawSlides() []session.Slide {
+	if req.Snapshot != nil {
+		return req.Snapshot()
+	}
+	return req.Slides
+}
+
+func (req Request) slides(st *runState) []session.Slide {
+	raw := req.rawSlides()
+	out := make([]session.Slide, len(raw))
+	for i, s := range raw {
+		out[i] = st.apply(s)
+	}
+	return out
+}
+
 // Run executes visual dedup, sequential recognition and overlapping-text merge.
 func Run(ctx context.Context, req Request) (Result, error) {
 	if req.Recognizer == nil {
 		return Result{}, fmt.Errorf("recognizer is nil")
 	}
-	n := len(req.Slides)
-	out := make([]markdown.Slide, n)
-	imgs := make([]image.Image, n)
-	for i, s := range req.Slides {
-		out[i] = markdown.Slide{ID: s.ID, Name: s.Name, Text: s.Text}
-		if !s.Included {
-			out[i].Skip = true
-			out[i].Text = ""
-			continue
-		}
-		if err := ctx.Err(); err != nil {
-			return Result{Slides: out}, err
+	st := newRunState()
+	results := map[string]markdown.Slide{}
+	imgs := map[string]image.Image{}
+	ocrKept := map[string]struct{}{}
+	attempted := map[string]struct{}{}
+	load := func(s session.Slide) (image.Image, error) {
+		if img, ok := imgs[s.ID]; ok {
+			return img, nil
 		}
 		img, err := imageutil.OpenFile(s.Path)
 		if err != nil {
-			if ShouldProcess(s) && req.SetStatus != nil {
-				req.SetStatus(s.ID, session.StatusError, err.Error())
-			}
-			continue
+			return nil, err
 		}
-		imgs[i] = img
+		imgs[s.ID] = img
+		return img, nil
 	}
 
-	plan := dedup.PlanVisual(imgs, req.PDQThreshold)
-	already := 0
-	todoOCR := 0
-	for i, s := range req.Slides {
-		if !s.Included {
-			continue
+	for _, s := range req.slides(st) {
+		md := markdown.Slide{ID: s.ID, Name: s.Name, Text: s.Text}
+		if !s.Included && s.Status != session.StatusNoText {
+			md.Skip = true
+			md.Text = ""
 		}
-		if !ShouldProcess(s) {
-			already++
-			continue
-		}
-		if plan[i].Skip || imgs[i] == nil {
-			continue
-		}
-		todoOCR++
+		results[s.ID] = md
 	}
-	total := already + todoOCR
-	done := already
 
-	for i, s := range req.Slides {
+	for {
 		if err := ctx.Err(); err != nil {
-			return Result{Slides: out}, err
+			return collectResult(req.slides(st), results), err
 		}
-		if !s.Included {
+		snap := req.slides(st)
+		var candidate *session.Slide
+		idx := -1
+		doneN, todoN := 0, 0
+		for i := range snap {
+			s := snap[i]
+			if !s.Included {
+				continue
+			}
+			if ShouldProcess(s) {
+				todoN++
+				if candidate == nil {
+					if _, ok := attempted[s.ID]; !ok {
+						c := s
+						candidate = &c
+						idx = i
+					}
+				}
+				continue
+			}
+			doneN++
+		}
+		total := doneN + todoN
+		if candidate == nil {
+			return collectResult(snap, results), nil
+		}
+		s := *candidate
+		img, err := load(s)
+		if err != nil {
+			attempted[s.ID] = struct{}{}
+			st.setStatus(s.ID, session.StatusError, err.Error(), req.SetStatus)
+			md := markdown.Slide{ID: s.ID, Name: s.Name, Skip: true}
+			results[s.ID] = md
 			continue
 		}
-		if !ShouldProcess(s) {
-			continue
-		}
-		if imgs[i] == nil {
-			out[i].Skip = true
-			continue
-		}
-		if plan[i].Skip {
-			detail := fmt.Sprintf("дубль кадра (PDQ %d)", plan[i].Distance)
-			out[i].Skip = true
-			out[i].Text = ""
-			if req.SetStatus != nil {
-				req.SetStatus(s.ID, session.StatusSkipped, detail)
+		if skip, dist, ok := visualDup(img, req.PDQThreshold, snap, s.ID, ocrKept, load); ok && skip {
+			attempted[s.ID] = struct{}{}
+			detail := fmt.Sprintf("дубль кадра (PDQ %d)", dist)
+			st.setStatus(s.ID, session.StatusSkipped, detail, req.SetStatus)
+			md := markdown.Slide{ID: s.ID, Name: s.Name, Skip: true}
+			results[s.ID] = md
+			if req.OnSlide != nil {
+				req.OnSlide(cloneSlide(md))
 			}
 			if req.OnProgress != nil {
-				req.OnProgress(Progress{Current: done, Total: total, Slide: s, Message: detail})
+				req.OnProgress(Progress{Current: doneN, Total: total, Slide: s, Message: detail})
 			}
 			continue
 		}
-		if req.SetStatus != nil {
-			req.SetStatus(s.ID, session.StatusRunning, "")
-		}
+		st.setStatus(s.ID, session.StatusRunning, "", req.SetStatus)
 		if req.OnProgress != nil {
 			req.OnProgress(Progress{
-				Current: done,
+				Current: doneN,
 				Total:   total,
 				Slide:   s,
 				Message: "распознавание " + s.Name,
 			})
 		}
-		md, err := recognizeImage(ctx, req.Recognizer, imgs[i], req.Prompt, req.Illustrations, i, s)
+		md, err := recognizeImage(ctx, req.Recognizer, img, req.Prompt, req.Illustrations, req.EmptyAsImages, idx, s)
+		attempted[s.ID] = struct{}{}
 		if err != nil {
 			if canceled(ctx, err) {
-				if req.SetStatus != nil {
-					req.SetStatus(s.ID, session.StatusPending, "")
-				}
-				return Result{Slides: out}, err
+				st.setStatus(s.ID, session.StatusPending, "", req.SetStatus)
+				return collectResult(req.slides(st), results), err
 			}
-			if req.SetStatus != nil {
-				req.SetStatus(s.ID, session.StatusError, err.Error())
-			}
-			out[i].Skip = true
-			done++
+			st.setStatus(s.ID, session.StatusError, err.Error(), req.SetStatus)
+			md = markdown.Slide{ID: s.ID, Name: s.Name, Skip: true}
+			results[s.ID] = md
 			continue
 		}
-		wasSkip := make([]bool, n)
-		for j := range out {
-			wasSkip[j] = out[j].Skip
-		}
-		out[i] = md
-		collapseTextDuplicates(out, req)
-		if out[i].Skip {
-			if req.SetStatus != nil {
-				req.SetStatus(s.ID, session.StatusSkipped, "повтор текста")
+		if md.NoText {
+			st.included[s.ID] = false
+			st.text[s.ID] = md.Text
+			st.setStatus(s.ID, session.StatusNoText, "Нет текста", req.SetStatus)
+			results[s.ID] = md
+			if req.OnSlide != nil {
+				req.OnSlide(cloneSlide(md))
 			}
-		} else if req.SetStatus != nil {
-			req.SetStatus(s.ID, session.StatusDone, "")
+			continue
 		}
-		emitChanged(req, out, i, wasSkip)
-		done++
+		ocrKept[s.ID] = struct{}{}
+		st.text[s.ID] = md.Text
+		results[s.ID] = md
+		skipped := collapseByOrder(results, req.slides(st), func(id string, status session.Status, detail string) {
+			st.setStatus(id, status, detail, req.SetStatus)
+			if status == session.StatusSkipped {
+				delete(st.text, id)
+			}
+		})
+		md = results[s.ID]
+		if md.Skip {
+			st.setStatus(s.ID, session.StatusSkipped, "повтор текста", req.SetStatus)
+		} else {
+			st.setStatus(s.ID, session.StatusDone, "", req.SetStatus)
+		}
+		if req.OnSlide != nil {
+			req.OnSlide(cloneSlide(md))
+			for _, id := range skipped {
+				if id == s.ID {
+					continue
+				}
+				req.OnSlide(cloneSlide(results[id]))
+			}
+		}
 		if req.OnProgress != nil {
-			req.OnProgress(Progress{Current: done, Total: total, Slide: s, Message: "готово " + s.Name})
+			req.OnProgress(Progress{Current: doneN + 1, Total: total, Slide: s, Message: "готово " + s.Name})
 		}
 	}
+}
 
-	return Result{Slides: out}, nil
+func collectResult(snap []session.Slide, results map[string]markdown.Slide) Result {
+	out := make([]markdown.Slide, 0, len(snap))
+	for _, s := range snap {
+		if md, ok := results[s.ID]; ok {
+			out = append(out, md)
+			continue
+		}
+		md := markdown.Slide{ID: s.ID, Name: s.Name, Text: s.Text}
+		if !s.Included && s.Status != session.StatusNoText {
+			md.Skip = true
+			md.Text = ""
+		}
+		out = append(out, md)
+	}
+	return Result{Slides: out}
+}
+
+func visualDup(img image.Image, threshold int, snap []session.Slide, id string, ocrKept map[string]struct{}, load func(session.Slide) (image.Image, error)) (skip bool, dist int, ok bool) {
+	keep, err := dedup.NewVisualKeep()
+	if err != nil {
+		return false, 0, false
+	}
+	for _, other := range snap {
+		if other.ID == id {
+			continue
+		}
+		_, ocr := ocrKept[other.ID]
+		if !(other.Included && other.Status == session.StatusDone) && !ocr {
+			continue
+		}
+		oimg, oerr := load(other)
+		if oerr != nil {
+			continue
+		}
+		keep.Remember(oimg)
+	}
+	skip, dist = keep.Duplicate(img, threshold)
+	return skip, dist, true
+}
+
+func collapseByOrder(results map[string]markdown.Slide, snap []session.Slide, setStatus func(id string, status session.Status, detail string)) []string {
+	type item struct {
+		id string
+		md markdown.Slide
+	}
+	var chain []item
+	for _, s := range snap {
+		md, ok := results[s.ID]
+		if !ok || md.Skip || md.NoText || md.Text == "" {
+			continue
+		}
+		chain = append(chain, item{id: s.ID, md: md})
+	}
+	var newly []string
+	last := -1
+	for i := range chain {
+		if last >= 0 && dedup.Overlaps(chain[last].md.Text, chain[i].md.Text) {
+			if len([]rune(chain[i].md.Text)) >= len([]rune(chain[last].md.Text)) {
+				old := chain[last]
+				old.md.Skip = true
+				old.md.Text = ""
+				results[old.id] = old.md
+				if setStatus != nil {
+					setStatus(old.id, session.StatusSkipped, "повтор текста")
+				}
+				newly = append(newly, old.id)
+				last = i
+			} else {
+				chain[i].md.Skip = true
+				chain[i].md.Text = ""
+				results[chain[i].id] = chain[i].md
+				if setStatus != nil {
+					setStatus(chain[i].id, session.StatusSkipped, "повтор текста")
+				}
+				newly = append(newly, chain[i].id)
+			}
+			continue
+		}
+		last = i
+	}
+	return newly
 }
 
 // RecognizeOne runs OCR for a single slide, replacing illustration crops.
@@ -206,7 +365,7 @@ func RecognizeOne(ctx context.Context, req OneRequest) (markdown.Slide, error) {
 		}
 		return markdown.Slide{ID: s.ID, Name: s.Name, Skip: true}, err
 	}
-	md, err := recognizeImage(ctx, req.Recognizer, img, req.Prompt, req.Illustrations, req.Index, s)
+	md, err := recognizeImage(ctx, req.Recognizer, img, req.Prompt, req.Illustrations, req.EmptyAsImages, req.Index, s)
 	if err != nil {
 		if canceled(ctx, err) {
 			if req.SetStatus != nil {
@@ -219,13 +378,19 @@ func RecognizeOne(ctx context.Context, req OneRequest) (markdown.Slide, error) {
 		}
 		return markdown.Slide{ID: s.ID, Name: s.Name, Skip: true}, err
 	}
+	if md.NoText {
+		if req.SetStatus != nil {
+			req.SetStatus(s.ID, session.StatusNoText, "Нет текста")
+		}
+		return md, nil
+	}
 	if req.SetStatus != nil {
 		req.SetStatus(s.ID, session.StatusDone, "")
 	}
 	return md, nil
 }
 
-func recognizeImage(ctx context.Context, rec Recognizer, img image.Image, prompt string, illustrations bool, index int, s session.Slide) (markdown.Slide, error) {
+func recognizeImage(ctx context.Context, rec Recognizer, img image.Image, prompt string, illustrations, emptyAsImages bool, index int, s session.Slide) (markdown.Slide, error) {
 	if err := ctx.Err(); err != nil {
 		return markdown.Slide{}, err
 	}
@@ -237,31 +402,34 @@ func recognizeImage(ctx context.Context, rec Recognizer, img image.Image, prompt
 	if err != nil {
 		return markdown.Slide{ID: s.ID, Name: s.Name, Skip: true}, err
 	}
-	return markdown.Slide{
+	md := markdown.Slide{
 		ID:     s.ID,
 		Name:   s.Name,
 		Text:   text,
 		Assets: store.Items,
-	}, nil
+	}
+	if markdown.HasSlideText(text) {
+		return md, nil
+	}
+	md.NoText = true
+	if emptyAsImages {
+		rel, err := store.SaveFull("Нет текста")
+		if err == nil {
+			md.Text = fmt.Sprintf("![Нет текста](%s)", rel)
+			md.Assets = store.Items
+		} else {
+			md.Text = ""
+			md.Assets = nil
+		}
+	} else {
+		md.Text = ""
+		md.Assets = nil
+	}
+	return md, nil
 }
 
 func canceled(ctx context.Context, err error) bool {
 	return errors.Is(err, context.Canceled) || ctx.Err() != nil
-}
-
-func emitChanged(req Request, out []markdown.Slide, current int, wasSkip []bool) {
-	if req.OnSlide == nil {
-		return
-	}
-	req.OnSlide(cloneSlide(out[current]))
-	for j := range out {
-		if j == current {
-			continue
-		}
-		if out[j].Skip && (j >= len(wasSkip) || !wasSkip[j]) {
-			req.OnSlide(cloneSlide(out[j]))
-		}
-	}
 }
 
 func cloneSlide(s markdown.Slide) markdown.Slide {
@@ -269,31 +437,4 @@ func cloneSlide(s markdown.Slide) markdown.Slide {
 		s.Assets = append([]imageutil.Asset(nil), s.Assets...)
 	}
 	return s
-}
-
-func collapseTextDuplicates(out []markdown.Slide, req Request) {
-	last := -1
-	for i := range out {
-		if out[i].Skip || out[i].Text == "" {
-			continue
-		}
-		if last >= 0 && dedup.Overlaps(out[last].Text, out[i].Text) {
-			if len([]rune(out[i].Text)) >= len([]rune(out[last].Text)) {
-				out[last].Skip = true
-				out[last].Text = ""
-				if req.SetStatus != nil && last < len(req.Slides) {
-					req.SetStatus(req.Slides[last].ID, session.StatusSkipped, "повтор текста")
-				}
-				last = i
-			} else {
-				out[i].Skip = true
-				out[i].Text = ""
-				if req.SetStatus != nil && i < len(req.Slides) {
-					req.SetStatus(req.Slides[i].ID, session.StatusSkipped, "повтор текста")
-				}
-			}
-			continue
-		}
-		last = i
-	}
 }

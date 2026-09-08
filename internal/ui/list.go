@@ -63,6 +63,7 @@ type statusCell struct {
 	widget.BaseWidget
 	label *widget.Label
 	check *widget.Button
+	empty *widget.Button
 	box   *fyne.Container
 }
 
@@ -75,7 +76,10 @@ func newStatusCell() *statusCell {
 	c.check = widget.NewButtonWithIcon("", theme.ConfirmIcon(), nil)
 	c.check.Importance = widget.SuccessImportance
 	c.check.Hide()
-	c.box = container.NewStack(c.label, c.check)
+	c.empty = widget.NewButton("Нет текста", nil)
+	c.empty.Importance = widget.WarningImportance
+	c.empty.Hide()
+	c.box = container.NewStack(c.label, c.check, c.empty)
 	c.box.Resize(fyne.NewSize(196, 72))
 	return c
 }
@@ -89,6 +93,8 @@ func (c *statusCell) MinSize() fyne.Size {
 }
 
 func (c *statusCell) set(s session.Slide, onDone func()) {
+	c.empty.Hide()
+	c.empty.OnTapped = nil
 	if s.Status == session.StatusDone {
 		c.label.SetText("")
 		c.label.Hide()
@@ -99,6 +105,12 @@ func (c *statusCell) set(s session.Slide, onDone func()) {
 	}
 	c.check.OnTapped = nil
 	c.check.Hide()
+	if s.Status == session.StatusNoText {
+		c.label.Hide()
+		c.empty.Show()
+		c.empty.OnTapped = onDone
+		return
+	}
 	c.label.Show()
 	c.label.SetText(statusText(s))
 }
@@ -219,15 +231,15 @@ func (u *App) buildList() *widget.List {
 					to = n - 1
 				}
 				u.doc.Move(from, to)
-				u.refreshList()
+				u.onInputOrderChanged()
 			}
 			row.up.OnTapped = func() {
 				u.doc.SwapAdjacent(idx, false)
-				u.refreshList()
+				u.onInputOrderChanged()
 			}
 			row.down.OnTapped = func() {
 				u.doc.SwapAdjacent(idx, true)
-				u.refreshList()
+				u.onInputOrderChanged()
 			}
 			row.up.Enable()
 			row.down.Enable()
@@ -247,6 +259,8 @@ func statusText(s session.Slide) string {
 		return "распознавание…"
 	case session.StatusDone:
 		return ""
+	case session.StatusNoText:
+		return "Нет текста"
 	case session.StatusSkipped:
 		if s.Detail != "" {
 			return s.Detail
@@ -281,10 +295,15 @@ func (u *App) inputToolbar() fyne.CanvasObject {
 	return container.NewHBox(
 		widget.NewButtonWithIcon("Загрузить файлы", theme.FileImageIcon(), u.openFiles),
 		widget.NewButtonWithIcon("Добавить папку", theme.FolderOpenIcon(), u.openFolder),
-		widget.NewButton("Реверс", func() { u.doc.Reverse(); u.refreshList() }),
-		widget.NewButton("По имени", func() { u.doc.SortByName(); u.refreshList() }),
-		widget.NewButton("По дате", func() { u.doc.SortByModTime(); u.refreshList() }),
+		widget.NewButton("Реверс", func() { u.doc.Reverse(); u.onInputOrderChanged() }),
+		widget.NewButton("По имени", func() { u.doc.SortByName(); u.onInputOrderChanged() }),
+		widget.NewButton("По дате", func() { u.doc.SortByModTime(); u.onInputOrderChanged() }),
 	)
+}
+
+func (u *App) onInputOrderChanged() {
+	u.refreshList()
+	u.syncOutput()
 }
 
 func (u *App) showImagePreview(path string) {

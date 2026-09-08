@@ -33,6 +33,29 @@ var _ = Describe("Stitch", func() {
 	})
 })
 
+var _ = Describe("OrderByIDs", func() {
+	It("orders slides by the given ids", func() {
+		slides := []markdown.Slide{
+			{ID: "2", Text: "b"},
+			{ID: "1", Text: "a"},
+		}
+		got := markdown.OrderByIDs([]string{"1", "2"}, slides)
+		Expect(got).To(HaveLen(2))
+		Expect(got[0].ID).To(Equal("1"))
+		Expect(got[1].ID).To(Equal("2"))
+	})
+})
+
+var _ = Describe("HasSlideText", func() {
+	It("ignores image links and whitespace", func() {
+		Expect(markdown.HasSlideText("")).To(BeFalse())
+		Expect(markdown.HasSlideText("   ")).To(BeFalse())
+		Expect(markdown.HasSlideText("![Нет текста](assets/x.png)")).To(BeFalse())
+		Expect(markdown.HasSlideText("# Заголовок")).To(BeTrue())
+		Expect(markdown.HasSlideText("см. ![рис](assets/a.png)")).To(BeTrue())
+	})
+})
+
 var _ = Describe("Save", func() {
 	It("writes markdown and sidecar assets", func() {
 		dir := GinkgoT().TempDir()
