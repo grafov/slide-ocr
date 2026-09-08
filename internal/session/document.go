@@ -3,6 +3,7 @@ package session
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -38,6 +39,7 @@ type Slide struct {
 	ID      string
 	Path    string
 	Name    string
+	Size    int64
 	ModTime time.Time
 	Thumb   image.Image
 	Status  Status
@@ -78,6 +80,18 @@ func (d *Document) At(index int) (Slide, bool) {
 	return d.slides[index], true
 }
 
+// IndexByID returns the list index of the slide with the given id.
+func (d *Document) IndexByID(id string) (int, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := range d.slides {
+		if d.slides[i].ID == id {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
 // AddPaths appends image files that are not already in the list.
 func (d *Document) AddPaths(paths []string) int {
 	d.mu.Lock()
@@ -96,8 +110,10 @@ func (d *Document) AddPaths(paths []string) int {
 			continue
 		}
 		infoMod := time.Time{}
-		if t, err := imageutil.ModTime(p); err == nil {
-			infoMod = t
+		var size int64
+		if info, err := os.Stat(p); err == nil {
+			infoMod = info.ModTime()
+			size = info.Size()
 		}
 		d.nextID.Add(1)
 		id := d.nextID.Load()
@@ -105,6 +121,7 @@ func (d *Document) AddPaths(paths []string) int {
 			ID:      strconv.FormatUint(id, 10),
 			Path:    p,
 			Name:    filepath.Base(p),
+			Size:    size,
 			ModTime: infoMod,
 			Status:  StatusPending,
 		})

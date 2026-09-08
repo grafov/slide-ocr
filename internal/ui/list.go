@@ -1,20 +1,98 @@
 package ui
 
 import (
+	"fmt"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/grafov/slide-ocr/internal/imageutil"
 	"github.com/grafov/slide-ocr/internal/session"
 )
 
+type previewThumb struct {
+	widget.BaseWidget
+	img   *canvas.Image
+	path  string
+	onRMB func(string)
+}
+
+func newPreviewThumb() *previewThumb {
+	p := &previewThumb{}
+	p.ExtendBaseWidget(p)
+	p.img = canvas.NewImageFromResource(theme.FileImageIcon())
+	p.img.SetMinSize(fyne.NewSquareSize(72))
+	p.img.FillMode = canvas.ImageFillContain
+	return p
+}
+
+func (p *previewThumb) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(p.img)
+}
+
+func (p *previewThumb) TappedSecondary(*fyne.PointEvent) {
+	if p.path == "" || p.onRMB == nil {
+		return
+	}
+	p.onRMB(p.path)
+}
+
+var _ fyne.SecondaryTappable = (*previewThumb)(nil)
+
+type statusCell struct {
+	widget.BaseWidget
+	label *widget.Label
+	check *widget.Button
+	box   *fyne.Container
+}
+
+func newStatusCell() *statusCell {
+	c := &statusCell{}
+	c.ExtendBaseWidget(c)
+	c.label = widget.NewLabel("")
+	c.label.Truncation = fyne.TextTruncateEllipsis
+	c.label.TextStyle = fyne.TextStyle{Italic: true}
+	c.check = widget.NewButtonWithIcon("", theme.ConfirmIcon(), nil)
+	c.check.Importance = widget.SuccessImportance
+	c.check.Hide()
+	c.box = container.NewStack(c.label, c.check)
+	c.box.Resize(fyne.NewSize(48, 72))
+	return c
+}
+
+func (c *statusCell) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(c.box)
+}
+
+func (c *statusCell) MinSize() fyne.Size {
+	return fyne.NewSize(48, 72)
+}
+
+func (c *statusCell) set(s session.Slide, onDone func()) {
+	if s.Status == session.StatusDone {
+		c.label.SetText("")
+		c.label.Hide()
+		c.check.Show()
+		c.check.OnTapped = onDone
+		c.check.Enable()
+		return
+	}
+	c.check.OnTapped = nil
+	c.check.Hide()
+	c.label.Show()
+	c.label.SetText(statusText(s))
+}
+
 type slideRow struct {
 	widget.BaseWidget
-	thumb  *canvas.Image
+	thumb  *previewThumb
 	name   *widget.Label
-	status *widget.Label
+	size   *widget.Label
+	status *statusCell
 	handle *dragHandle
 	up     *widget.Button
 	down   *widget.Button
@@ -24,20 +102,19 @@ type slideRow struct {
 func newSlideRow() *slideRow {
 	r := &slideRow{}
 	r.ExtendBaseWidget(r)
-	r.thumb = canvas.NewImageFromResource(theme.FileImageIcon())
-	r.thumb.SetMinSize(fyne.NewSquareSize(72))
-	r.thumb.FillMode = canvas.ImageFillContain
+	r.thumb = newPreviewThumb()
 	r.name = widget.NewLabel("name")
 	r.name.Truncation = fyne.TextTruncateEllipsis
-	r.status = widget.NewLabel("")
-	r.status.TextStyle = fyne.TextStyle{Italic: true}
+	r.size = widget.NewLabel("")
+	r.size.TextStyle = fyne.TextStyle{Italic: true}
+	r.status = newStatusCell()
 	r.handle = newDragHandle()
 	r.up = widget.NewButtonWithIcon("", theme.MoveUpIcon(), nil)
 	r.down = widget.NewButtonWithIcon("", theme.MoveDownIcon(), nil)
 	r.box = container.NewBorder(
 		nil, nil, r.thumb,
-		container.NewHBox(r.handle, r.up, r.down),
-		container.NewVBox(r.name, r.status),
+		container.NewHBox(r.status, r.handle, r.up, r.down),
+		container.NewVBox(r.name, r.size),
 	)
 	return r
 }
@@ -57,15 +134,19 @@ func (u *App) buildList() *widget.List {
 				return
 			}
 			row.name.SetText(s.Name)
-			row.status.SetText(statusText(s))
+			row.size.SetText(formatFileSize(s.Size))
+			slideID := s.ID
+			row.status.set(s, func() { u.jumpToOutput(slideID) })
+			row.thumb.path = s.Path
+			row.thumb.onRMB = u.showImagePreview
 			if s.Thumb != nil {
-				row.thumb.Image = s.Thumb
-				row.thumb.Resource = nil
+				row.thumb.img.Image = s.Thumb
+				row.thumb.img.Resource = nil
 			} else {
-				row.thumb.Image = nil
-				row.thumb.Resource = theme.FileImageIcon()
+				row.thumb.img.Image = nil
+				row.thumb.img.Resource = theme.FileImageIcon()
 			}
-			row.thumb.Refresh()
+			row.thumb.img.Refresh()
 			idx := id
 			row.handle.index = idx
 			row.handle.onDrop = func(from, delta int) {
@@ -105,7 +186,7 @@ func statusText(s session.Slide) string {
 	case session.StatusRunning:
 		return "распознавание…"
 	case session.StatusDone:
-		return "готово"
+		return ""
 	case session.StatusSkipped:
 		if s.Detail != "" {
 			return s.Detail
@@ -121,6 +202,21 @@ func statusText(s session.Slide) string {
 	}
 }
 
+func formatFileSize(n int64) string {
+	const (
+		kb = 1024
+		mb = 1024 * 1024
+	)
+	switch {
+	case n >= mb:
+		return fmt.Sprintf("%.1f MB", float64(n)/float64(mb))
+	case n >= kb:
+		return fmt.Sprintf("%.1f KB", float64(n)/float64(kb))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
 func (u *App) inputToolbar() fyne.CanvasObject {
 	return container.NewHBox(
 		widget.NewButtonWithIcon("Загрузить файлы", theme.FileImageIcon(), u.openFiles),
@@ -129,4 +225,41 @@ func (u *App) inputToolbar() fyne.CanvasObject {
 		widget.NewButton("По имени", func() { u.doc.SortByName(); u.refreshList() }),
 		widget.NewButton("По дате", func() { u.doc.SortByModTime(); u.refreshList() }),
 	)
+}
+
+func (u *App) showImagePreview(path string) {
+	go func() {
+		img, err := imageutil.OpenFile(path)
+		if err != nil {
+			fyne.Do(func() { dialog.ShowError(err, u.win) })
+			return
+		}
+		fitted := imageutil.FitForPreview(img)
+		fyne.Do(func() {
+			view := canvas.NewImageFromImage(fitted)
+			view.FillMode = canvas.ImageFillContain
+			view.SetMinSize(fyne.NewSize(720, 480))
+			d := dialog.NewCustom("Превью", "Закрыть", container.NewScroll(view), u.win)
+			d.Resize(fyne.NewSize(900, 700))
+			d.Show()
+		})
+	}()
+}
+
+func (u *App) jumpToInput(id string) {
+	idx, ok := u.doc.IndexByID(id)
+	if !ok {
+		return
+	}
+	u.tabs.SelectIndex(0)
+	u.list.Select(idx)
+	u.list.ScrollTo(idx)
+}
+
+func (u *App) jumpToOutput(id string) {
+	u.setFragmentsView(true)
+	if len(u.tabs.Items) > 2 {
+		u.tabs.SelectIndex(2)
+	}
+	u.scrollFragmentIntoView(id)
 }

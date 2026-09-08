@@ -8,7 +8,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/storage"
 
 	"github.com/grafov/slide-ocr/internal/dedup"
 	"github.com/grafov/slide-ocr/internal/llm"
@@ -41,6 +40,12 @@ func (u *App) start() {
 		promptText = u.promptBox.Text
 	}
 	u.doc.ResetRecognition()
+	slides := u.doc.Snapshot()
+	u.result = make([]markdown.Slide, len(slides))
+	for i, s := range slides {
+		u.result[i] = markdown.Slide{ID: s.ID, Name: s.Name}
+	}
+	u.setFragmentsView(true)
 	u.refreshList()
 	u.running = true
 	u.startBtn.Disable()
@@ -49,7 +54,6 @@ func (u *App) start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	u.cancel = cancel
 	client := llm.New(cfg)
-	slides := u.doc.Snapshot()
 	illustrations := u.optIllust.Checked
 	go func() {
 		res, err := pipeline.Run(ctx, pipeline.Request{
@@ -61,6 +65,9 @@ func (u *App) start() {
 			SetStatus: func(id string, status session.Status, detail string) {
 				u.doc.SetStatus(id, status, detail)
 				fyne.Do(func() { u.list.Refresh() })
+			},
+			OnSlide: func(s markdown.Slide) {
+				fyne.Do(func() { u.applySlide(s) })
 			},
 			OnProgress: func(p pipeline.Progress) {
 				fyne.Do(func() {
@@ -88,19 +95,20 @@ func (u *App) finishRun(res pipeline.Result, err error) {
 	u.startBtn.Enable()
 	u.stopBtn.Disable()
 	u.cancel = nil
+	if len(res.Slides) > 0 {
+		u.result = res.Slides
+		u.syncOutput()
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		dialog.ShowError(err, u.win)
 		u.setStatus("ошибка: " + err.Error())
 		return
 	}
-	u.result = res.Slides
-	mode := u.currentMode()
-	u.outPreview.SetText(markdown.Stitch(u.result, mode))
-	u.progress.SetValue(1)
 	if errors.Is(err, context.Canceled) {
 		u.setStatus("остановлено")
 		return
 	}
+	u.progress.SetValue(1)
 	u.setStatus(fmt.Sprintf("готово, слайдов в выводе: %d", counted(u.result)))
 	if len(u.tabs.Items) > 2 {
 		u.tabs.SelectIndex(2)
@@ -129,46 +137,20 @@ func (u *App) currentMode() markdown.Mode {
 }
 
 func (u *App) saveOutput() {
-	if len(u.result) == 0 {
-		dialog.ShowError(errors.New("сначала запустите распознавание"), u.win)
+	dir := strings.TrimSpace(u.outDirEntry.Text)
+	if dir == "" {
+		dialog.ShowError(errors.New("выберите папку сохранения на вкладке Распознавание"), u.win)
+		return
+	}
+	slides := append([]markdown.Slide(nil), u.result...)
+	if counted(slides) == 0 {
+		dialog.ShowError(errors.New("ещё нет готовых слайдов"), u.win)
 		return
 	}
 	u.savePrefs()
-	mode := u.currentMode()
-	if mode == markdown.ModeSeparateFiles {
-		dialog.ShowFolderOpen(func(lu fyne.ListableURI, err error) {
-			if err != nil {
-				dialog.ShowError(err, u.win)
-				return
-			}
-			if lu == nil {
-				return
-			}
-			if err = markdown.Save(u.result, mode, lu.Path()); err != nil {
-				dialog.ShowError(err, u.win)
-				return
-			}
-			u.setStatus("сохранено в " + lu.Path())
-		}, u.win)
+	if err := markdown.SaveToDir(slides, u.currentMode(), dir); err != nil {
+		dialog.ShowError(err, u.win)
 		return
 	}
-	fd := dialog.NewFileSave(func(wc fyne.URIWriteCloser, err error) {
-		if err != nil {
-			dialog.ShowError(err, u.win)
-			return
-		}
-		if wc == nil {
-			return
-		}
-		path := wc.URI().Path()
-		_ = wc.Close()
-		if err = markdown.Save(u.result, mode, path); err != nil {
-			dialog.ShowError(err, u.win)
-			return
-		}
-		u.setStatus("сохранено: " + path)
-	}, u.win)
-	fd.SetFileName("lecture.md")
-	fd.SetFilter(storage.NewExtensionFileFilter([]string{".md"}))
-	fd.Show()
+	u.setStatus("сохранено в " + dir)
 }

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/kovidgoyal/imaging"
 )
@@ -16,7 +15,9 @@ import (
 const (
 	// MaxLLMSide is the longest edge sent to a vision model.
 	MaxLLMSide = 2048
-	jpegQual   = 85
+	// MaxPreviewSide is the longest edge of the right-click preview dialog.
+	MaxPreviewSide = 1600
+	jpegQual       = 85
 )
 
 var imageExt = map[string]struct{}{
@@ -28,15 +29,6 @@ var imageExt = map[string]struct{}{
 func IsImagePath(path string) bool {
 	_, ok := imageExt[strings.ToLower(filepath.Ext(path))]
 	return ok
-}
-
-// ModTime returns the file modification time.
-func ModTime(path string) (time.Time, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return info.ModTime(), nil
 }
 
 // OpenFile decodes an image using the pure-Go backend and EXIF orientation.
@@ -51,6 +43,15 @@ func ThumbnailFile(path string, size int) (image.Image, error) {
 		return nil, err
 	}
 	return imaging.Thumbnail(img, size, size, imaging.Linear), nil
+}
+
+// FitForPreview downscales a large image for the on-screen preview dialog.
+func FitForPreview(img image.Image) image.Image {
+	b := img.Bounds()
+	if b.Dx() <= MaxPreviewSide && b.Dy() <= MaxPreviewSide {
+		return img
+	}
+	return imaging.Fit(img, MaxPreviewSide, MaxPreviewSide, imaging.Lanczos)
 }
 
 // PrepareForLLM resizes large slides and encodes JPEG bytes for a data URI.

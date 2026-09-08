@@ -32,6 +32,7 @@ const (
 	prefStyles  = "opt.styles"
 	prefFrag    = "opt.fragments"
 	prefOutMode = "output.mode"
+	prefOutDir  = "output.dir"
 
 	defaultURL = "http://127.0.0.1:1234/v1"
 )
@@ -42,11 +43,17 @@ const (
 	outSeparate   = "Отдельные файлы"
 )
 
+type fragItem struct {
+	id  string
+	obj fyne.CanvasObject
+}
+
 // App is the main window content and actions.
 type App struct {
 	fyneApp fyne.App
 	win     fyne.Window
 	doc     *session.Document
+	root    fyne.CanvasObject
 
 	list        *widget.List
 	status      *widget.Label
@@ -72,9 +79,16 @@ type App struct {
 	optTables   *widget.Check
 	optStyles   *widget.Check
 	optFrag     *widget.Check
+	outDirEntry *widget.Entry
 
-	outMode    *widget.RadioGroup
-	outPreview *widget.Entry
+	outMode       *widget.RadioGroup
+	outPreview    *widget.Entry
+	outToggle     *widget.Button
+	fragScroll    *container.Scroll
+	fragBox       *fyne.Container
+	fragRows      []fragItem
+	showFragments bool
+	outBody       *fyne.Container
 
 	tabs    *container.AppTabs
 	running bool
@@ -85,12 +99,14 @@ type App struct {
 // New constructs the tabbed UI.
 func New(a fyne.App, win fyne.Window) *App {
 	u := &App{
-		fyneApp:  a,
-		win:      win,
-		doc:      &session.Document{},
-		status:   widget.NewLabel("Добавьте изображения слайдов."),
-		progress: widget.NewProgressBar(),
+		fyneApp:       a,
+		win:           win,
+		doc:           &session.Document{},
+		status:        widget.NewLabel("Добавьте изображения слайдов."),
+		progress:      widget.NewProgressBar(),
+		showFragments: true,
 	}
+	u.status.Truncation = fyne.TextTruncateEllipsis
 	u.progress.Min = 0
 	u.progress.Max = 1
 	u.buildRecognizeControls()
@@ -102,7 +118,7 @@ func New(a fyne.App, win fyne.Window) *App {
 	savedMode := a.Preferences().StringWithFallback(prefOutMode, outContinuous)
 	u.outMode.SetSelected(savedMode)
 
-	inputTab := container.NewBorder(u.inputToolbar(), u.statusBar(), nil, nil, u.list)
+	inputTab := container.NewBorder(u.inputToolbar(), nil, nil, nil, u.list)
 	recTab := u.recognizeTab()
 	outTab := u.outputTab()
 
@@ -111,6 +127,8 @@ func New(a fyne.App, win fyne.Window) *App {
 		container.NewTabItem("Распознавание", recTab),
 		container.NewTabItem("Вывод", outTab),
 	)
+	chrome := container.NewVBox(u.progress, u.status)
+	u.root = container.NewBorder(nil, chrome, nil, nil, u.tabs)
 	win.SetOnDropped(func(_ fyne.Position, uris []fyne.URI) {
 		paths := make([]string, 0, len(uris))
 		for _, uri := range uris {
@@ -125,11 +143,7 @@ func New(a fyne.App, win fyne.Window) *App {
 
 // Canvas is the root widget for the window.
 func (u *App) Canvas() fyne.CanvasObject {
-	return u.tabs
-}
-
-func (u *App) statusBar() fyne.CanvasObject {
-	return container.NewBorder(nil, nil, nil, nil, u.status)
+	return u.root
 }
 
 func (u *App) setStatus(s string) {
@@ -192,5 +206,19 @@ func (u *App) openFolder() {
 			return
 		}
 		u.addPaths([]string{lu.Path()})
+	}, u.win)
+}
+
+func (u *App) pickSaveDir() {
+	dialog.ShowFolderOpen(func(lu fyne.ListableURI, err error) {
+		if err != nil {
+			dialog.ShowError(err, u.win)
+			return
+		}
+		if lu == nil {
+			return
+		}
+		u.outDirEntry.SetText(lu.Path())
+		u.savePrefs()
 	}, u.win)
 }

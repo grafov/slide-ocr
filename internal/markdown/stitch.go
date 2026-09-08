@@ -25,10 +25,13 @@ const (
 const (
 	separator    = "-----"
 	assetsMarker = "assets/"
+	// CombinedFileName is the Markdown file written for continuous and separator modes.
+	CombinedFileName = "recognized-text.md"
 )
 
 // Slide is one recognized slide ready for export.
 type Slide struct {
+	ID     string
 	Name   string
 	Text   string
 	Assets []imageutil.Asset
@@ -77,18 +80,29 @@ func Save(slides []Slide, mode Mode, dest string) error {
 	}
 }
 
+// SaveToDir writes the current slides into dir, overwriting previous files of the same names.
+func SaveToDir(slides []Slide, mode Mode, dir string) error {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return fmt.Errorf("empty output directory")
+	}
+	if mode == ModeSeparateFiles {
+		return saveSeparate(slides, dir)
+	}
+	return Save(slides, mode, filepath.Join(dir, CombinedFileName))
+}
+
 func saveSeparate(slides []Slide, dir string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 	assetDir := filepath.Join(dir, "assets")
-	n := 0
+	used := make(map[string]int)
 	for _, s := range slides {
 		if s.Skip || strings.TrimSpace(s.Text) == "" {
 			continue
 		}
-		n++
-		name := fmt.Sprintf("%03d-%s.md", n, sanitize(s.Name))
+		name := uniqueMarkdownName(used, s.Name)
 		path := filepath.Join(dir, name)
 		text := strings.TrimSpace(s.Text) + "\n"
 		if err := imageutil.WriteFile(path, []byte(text)); err != nil {
@@ -96,6 +110,16 @@ func saveSeparate(slides []Slide, dir string) error {
 		}
 	}
 	return writeAssets(slides, assetDir)
+}
+
+func uniqueMarkdownName(used map[string]int, name string) string {
+	stem := sanitize(name)
+	used[stem]++
+	n := used[stem]
+	if n == 1 {
+		return stem + ".md"
+	}
+	return fmt.Sprintf("%s-%d.md", stem, n)
 }
 
 func writeAssets(slides []Slide, dir string) error {

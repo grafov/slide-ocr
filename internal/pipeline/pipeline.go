@@ -33,6 +33,7 @@ type Request struct {
 	PDQThreshold  int
 	Recognizer    Recognizer
 	OnProgress    func(Progress)
+	OnSlide       func(markdown.Slide)
 	SetStatus     func(id string, status session.Status, detail string)
 }
 
@@ -47,10 +48,11 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("recognizer is nil")
 	}
 	n := len(req.Slides)
+	out := make([]markdown.Slide, n)
 	imgs := make([]image.Image, n)
 	for i, s := range req.Slides {
-		if ctx.Err() != nil {
-			return Result{}, ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return Result{Slides: out}, err
 		}
 		img, err := imageutil.OpenFile(s.Path)
 		if err != nil {
@@ -64,7 +66,6 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	plan := dedup.PlanVisual(imgs, req.PDQThreshold)
-	out := make([]markdown.Slide, n)
 
 	todo := 0
 	for _, d := range plan {
@@ -75,9 +76,9 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	done := 0
 
 	for i, s := range req.Slides {
-		out[i] = markdown.Slide{Name: s.Name}
-		if ctx.Err() != nil {
-			return Result{}, ctx.Err()
+		out[i] = markdown.Slide{ID: s.ID, Name: s.Name}
+		if err := ctx.Err(); err != nil {
+			return Result{Slides: out}, err
 		}
 		if imgs[i] == nil {
 			out[i].Skip = true
@@ -118,20 +119,50 @@ func Run(ctx context.Context, req Request) (Result, error) {
 			done++
 			continue
 		}
+		wasSkip := make([]bool, n)
+		for j := range out {
+			wasSkip[j] = out[j].Skip
+		}
 		out[i].Text = text
 		out[i].Assets = store.Items
-		if req.SetStatus != nil {
+		collapseTextDuplicates(out, req)
+		if out[i].Skip {
+			if req.SetStatus != nil {
+				req.SetStatus(s.ID, session.StatusSkipped, "повтор текста")
+			}
+		} else if req.SetStatus != nil {
 			req.SetStatus(s.ID, session.StatusDone, "")
 		}
+		emitChanged(req, out, i, wasSkip)
 		done++
 		if req.OnProgress != nil {
 			req.OnProgress(Progress{Current: done, Total: todo, Slide: s, Message: "готово " + s.Name})
 		}
 	}
 
-	collapseTextDuplicates(out, req)
-
 	return Result{Slides: out}, nil
+}
+
+func emitChanged(req Request, out []markdown.Slide, current int, wasSkip []bool) {
+	if req.OnSlide == nil {
+		return
+	}
+	req.OnSlide(cloneSlide(out[current]))
+	for j := range out {
+		if j == current {
+			continue
+		}
+		if out[j].Skip && (j >= len(wasSkip) || !wasSkip[j]) {
+			req.OnSlide(cloneSlide(out[j]))
+		}
+	}
+}
+
+func cloneSlide(s markdown.Slide) markdown.Slide {
+	if len(s.Assets) > 0 {
+		s.Assets = append([]imageutil.Asset(nil), s.Assets...)
+	}
+	return s
 }
 
 func collapseTextDuplicates(out []markdown.Slide, req Request) {

@@ -42,6 +42,8 @@ func (u *App) buildRecognizeControls() {
 	u.optTables = widget.NewCheck("Распознавать таблицы", u.onPromptOptions)
 	u.optStyles = widget.NewCheck("Выделение стилей", u.onPromptOptions)
 	u.optFrag = widget.NewCheck("Дополнять обрывки", u.onPromptOptions)
+	u.outDirEntry = widget.NewEntry()
+	u.outDirEntry.SetPlaceHolder("папка для Markdown")
 
 	u.promptBox = widget.NewMultiLineEntry()
 	u.promptBox.Wrapping = fyne.TextWrapWord
@@ -66,11 +68,10 @@ func (u *App) recognizeTab() fyne.CanvasObject {
 		u.rebuildPrompt()
 	})
 	top := container.NewHBox(
-		widget.NewButtonWithIcon("Загрузить файлы", theme.FileImageIcon(), u.openFiles),
-		widget.NewButtonWithIcon("Добавить папку", theme.FolderOpenIcon(), u.openFolder),
 		u.startBtn,
 		u.stopBtn,
 	)
+	browseDir := widget.NewButtonWithIcon("Выбрать папку…", theme.FolderOpenIcon(), u.pickSaveDir)
 	form := widget.NewForm(
 		widget.NewFormItem("URL", u.urlEntry),
 		widget.NewFormItem("API key", u.keyEntry),
@@ -80,10 +81,10 @@ func (u *App) recognizeTab() fyne.CanvasObject {
 		widget.NewFormItem("Max tokens", u.tokensEntry),
 		widget.NewFormItem("Языки", container.NewVBox(container.NewHBox(u.langRU, u.langEN), u.langExtra)),
 		widget.NewFormItem("Опции", container.NewVBox(u.optIllust, u.optTables, u.optStyles, u.optFrag)),
+		widget.NewFormItem("Папка сохранения", container.NewBorder(nil, nil, nil, browseDir, u.outDirEntry)),
 	)
 	mid := container.NewVScroll(container.NewVBox(form, rebuild, widget.NewLabel("Итоговый промпт")))
-	bottom := container.NewBorder(u.progress, nil, nil, nil, u.promptBox)
-	return container.NewBorder(top, bottom, nil, nil, mid)
+	return container.NewBorder(top, u.promptBox, nil, nil, mid)
 }
 
 func (u *App) onPromptOptions(_ bool) {
@@ -170,6 +171,7 @@ func (u *App) loadPrefs() {
 	u.optTables.SetChecked(p.BoolWithFallback(prefTables, true))
 	u.optStyles.SetChecked(p.BoolWithFallback(prefStyles, true))
 	u.optFrag.SetChecked(p.BoolWithFallback(prefFrag, false))
+	u.outDirEntry.SetText(p.String(prefOutDir))
 }
 
 func (u *App) savePrefs() {
@@ -189,4 +191,5 @@ func (u *App) savePrefs() {
 	p.SetBool(prefStyles, u.optStyles.Checked)
 	p.SetBool(prefFrag, u.optFrag.Checked)
 	p.SetString(prefOutMode, u.outMode.Selected)
+	p.SetString(prefOutDir, u.outDirEntry.Text)
 }
