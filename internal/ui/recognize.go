@@ -57,8 +57,8 @@ func (u *App) buildRecognizeControls() {
 
 	u.startBtn = widget.NewButtonWithIcon("Пуск", theme.MediaPlayIcon(), u.start)
 	u.startBtn.Importance = widget.HighImportance
-	u.stopBtn = widget.NewButtonWithIcon("Стоп", theme.MediaStopIcon(), u.stop)
-	u.stopBtn.Disable()
+	u.pauseBtn = widget.NewButtonWithIcon("Пауза", theme.MediaPauseIcon(), u.pause)
+	u.pauseBtn.Disable()
 }
 
 func (u *App) recognizeTab() fyne.CanvasObject {
@@ -69,7 +69,7 @@ func (u *App) recognizeTab() fyne.CanvasObject {
 	})
 	top := container.NewHBox(
 		u.startBtn,
-		u.stopBtn,
+		u.pauseBtn,
 	)
 	browseDir := widget.NewButtonWithIcon("Выбрать папку…", theme.FolderOpenIcon(), u.pickSaveDir)
 	form := widget.NewForm(

@@ -36,15 +36,16 @@ const (
 
 // Slide is one image in the current batch.
 type Slide struct {
-	ID      string
-	Path    string
-	Name    string
-	Size    int64
-	ModTime time.Time
-	Thumb   image.Image
-	Status  Status
-	Detail  string
-	Text    string
+	ID       string
+	Path     string
+	Name     string
+	Size     int64
+	ModTime  time.Time
+	Thumb    image.Image
+	Status   Status
+	Detail   string
+	Text     string
+	Included bool
 }
 
 // Document is the shared, mutex-protected batch used by all tabs.
@@ -118,12 +119,13 @@ func (d *Document) AddPaths(paths []string) int {
 		d.nextID.Add(1)
 		id := d.nextID.Load()
 		d.slides = append(d.slides, Slide{
-			ID:      strconv.FormatUint(id, 10),
-			Path:    p,
-			Name:    filepath.Base(p),
-			Size:    size,
-			ModTime: infoMod,
-			Status:  StatusPending,
+			ID:       strconv.FormatUint(id, 10),
+			Path:     p,
+			Name:     filepath.Base(p),
+			Size:     size,
+			ModTime:  infoMod,
+			Status:   StatusPending,
+			Included: true,
 		})
 		known[p] = struct{}{}
 		added++
@@ -220,8 +222,31 @@ func (d *Document) SetText(id, text string) {
 	}
 }
 
-// ResetRecognition clears per-slide OCR state before a new run.
-func (d *Document) ResetRecognition() {
+// SetIncluded marks whether the slide should be sent to OCR.
+func (d *Document) SetIncluded(id string, included bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := range d.slides {
+		if d.slides[i].ID != id {
+			continue
+		}
+		d.slides[i].Included = included
+		if !included {
+			d.slides[i].Text = ""
+			d.slides[i].Detail = ""
+		}
+		if d.slides[i].Status != StatusRunning {
+			d.slides[i].Status = StatusPending
+			if included {
+				d.slides[i].Detail = ""
+			}
+		}
+		return
+	}
+}
+
+// ClearOutput resets OCR text and statuses but keeps include flags and files.
+func (d *Document) ClearOutput() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for i := range d.slides {

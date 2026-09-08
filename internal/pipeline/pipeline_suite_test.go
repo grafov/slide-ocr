@@ -51,9 +51,9 @@ var _ = Describe("Run", func() {
 		rec := &stubRec{}
 		res, err := pipeline.Run(context.Background(), pipeline.Request{
 			Slides: []session.Slide{
-				{ID: "1", Path: p1, Name: "a.png"},
-				{ID: "2", Path: p2, Name: "b.png"},
-				{ID: "3", Path: p3, Name: "c.png"},
+				{ID: "1", Path: p1, Name: "a.png", Included: true},
+				{ID: "2", Path: p2, Name: "b.png", Included: true},
+				{ID: "3", Path: p3, Name: "c.png", Included: true},
 			},
 			Prompt:       "x",
 			PDQThreshold: 0,
@@ -81,8 +81,8 @@ var _ = Describe("Run", func() {
 		rec := &gateRec{seen: &slidesSeen}
 		_, err := pipeline.Run(context.Background(), pipeline.Request{
 			Slides: []session.Slide{
-				{ID: "1", Path: p1, Name: "a.png"},
-				{ID: "3", Path: p3, Name: "c.png"},
+				{ID: "1", Path: p1, Name: "a.png", Included: true},
+				{ID: "3", Path: p3, Name: "c.png", Included: true},
 			},
 			Prompt:       "x",
 			PDQThreshold: 0,
@@ -97,6 +97,77 @@ var _ = Describe("Run", func() {
 		Expect(int(rec.n.Load())).To(Equal(2))
 		Expect(int(slidesSeen.Load())).To(Equal(2))
 		Expect(rec.seenAtSecond.Load()).To(BeNumerically(">=", 1))
+	})
+
+	It("does not OCR a finished slide or an unchecked one", func() {
+		dir := GinkgoT().TempDir()
+		a := patterned(0)
+		c := patterned(1)
+		p1 := filepath.Join(dir, "a.png")
+		p3 := filepath.Join(dir, "c.png")
+		Expect(imaging.Save(a, p1)).To(Succeed())
+		Expect(imaging.Save(c, p3)).To(Succeed())
+		rec := &stubRec{}
+		res, err := pipeline.Run(context.Background(), pipeline.Request{
+			Slides: []session.Slide{
+				{ID: "1", Path: p1, Name: "a.png", Included: true, Status: session.StatusDone, Text: "уже готово"},
+				{ID: "3", Path: p3, Name: "c.png", Included: false},
+			},
+			Prompt:       "x",
+			PDQThreshold: 0,
+			Recognizer:   rec,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(int(rec.n.Load())).To(Equal(0))
+		Expect(res.Slides[0].Text).To(Equal("уже готово"))
+		Expect(res.Slides[1].Skip).To(BeTrue())
+	})
+
+	It("RecognizeOne OCRs a single included slide", func() {
+		dir := GinkgoT().TempDir()
+		a := patterned(0)
+		p1 := filepath.Join(dir, "a.png")
+		Expect(imaging.Save(a, p1)).To(Succeed())
+		rec := &stubRec{}
+		md, err := pipeline.RecognizeOne(context.Background(), pipeline.OneRequest{
+			Slide:      session.Slide{ID: "1", Path: p1, Name: "a.png", Included: true},
+			Prompt:     "x",
+			Recognizer: rec,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(int(rec.n.Load())).To(Equal(1))
+		Expect(md.Text).To(ContainSubstring("заголовок"))
+		Expect(md.ID).To(Equal("1"))
+	})
+
+	It("returns a canceled slide to pending", func() {
+		dir := GinkgoT().TempDir()
+		a := patterned(0)
+		p1 := filepath.Join(dir, "a.png")
+		Expect(imaging.Save(a, p1)).To(Succeed())
+		started := make(chan struct{})
+		rec := &cancelRec{started: started}
+		ctx, cancel := context.WithCancel(context.Background())
+		var last session.Status
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = pipeline.Run(ctx, pipeline.Request{
+				Slides: []session.Slide{
+					{ID: "1", Path: p1, Name: "a.png", Included: true},
+				},
+				Prompt:       "x",
+				PDQThreshold: 0,
+				Recognizer:   rec,
+				SetStatus: func(_ string, status session.Status, _ string) {
+					last = status
+				},
+			})
+		}()
+		Eventually(started).Should(BeClosed())
+		cancel()
+		Eventually(done).Should(BeClosed())
+		Expect(last).To(Equal(session.StatusPending))
 	})
 })
 
@@ -115,6 +186,16 @@ func (s *gateRec) Recognize(_ context.Context, _ image.Image, _ string, _ bool, 
 		return "Общий заголовок. Первый пункт.", nil
 	}
 	return "Совсем другая тема слайда про сети.", nil
+}
+
+type cancelRec struct {
+	started chan struct{}
+}
+
+func (c *cancelRec) Recognize(ctx context.Context, _ image.Image, _ string, _ bool, _ *imageutil.AssetStore) (string, error) {
+	close(c.started)
+	<-ctx.Done()
+	return "", ctx.Err()
 }
 
 func patterned(kind int) *image.NRGBA {

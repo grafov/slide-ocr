@@ -3,8 +3,10 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
+	"strings"
 
 	"github.com/grafov/slide-ocr/internal/dedup"
 	"github.com/grafov/slide-ocr/internal/imageutil"
@@ -37,9 +39,33 @@ type Request struct {
 	SetStatus     func(id string, status session.Status, detail string)
 }
 
+// OneRequest is OCR of a single slide with the current backend settings.
+type OneRequest struct {
+	Slide         session.Slide
+	Index         int
+	Prompt        string
+	Illustrations bool
+	Recognizer    Recognizer
+	SetStatus     func(id string, status session.Status, detail string)
+}
+
 // Result is OCR output for stitching and saving.
 type Result struct {
 	Slides []markdown.Slide
+}
+
+// ShouldProcess reports whether the slide still needs a VLM call.
+func ShouldProcess(s session.Slide) bool {
+	if !s.Included {
+		return false
+	}
+	if s.Status == session.StatusSkipped {
+		return false
+	}
+	if s.Status == session.StatusDone && strings.TrimSpace(s.Text) != "" {
+		return false
+	}
+	return true
 }
 
 // Run executes visual dedup, sequential recognition and overlapping-text merge.
@@ -51,13 +77,18 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	out := make([]markdown.Slide, n)
 	imgs := make([]image.Image, n)
 	for i, s := range req.Slides {
+		out[i] = markdown.Slide{ID: s.ID, Name: s.Name, Text: s.Text}
+		if !s.Included {
+			out[i].Skip = true
+			out[i].Text = ""
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return Result{Slides: out}, err
 		}
 		img, err := imageutil.OpenFile(s.Path)
 		if err != nil {
-			imgs[i] = nil
-			if req.SetStatus != nil {
+			if ShouldProcess(s) && req.SetStatus != nil {
 				req.SetStatus(s.ID, session.StatusError, err.Error())
 			}
 			continue
@@ -66,19 +97,33 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	plan := dedup.PlanVisual(imgs, req.PDQThreshold)
-
-	todo := 0
-	for _, d := range plan {
-		if !d.Skip && imgs[d.Index] != nil {
-			todo++
+	already := 0
+	todoOCR := 0
+	for i, s := range req.Slides {
+		if !s.Included {
+			continue
 		}
+		if !ShouldProcess(s) {
+			already++
+			continue
+		}
+		if plan[i].Skip || imgs[i] == nil {
+			continue
+		}
+		todoOCR++
 	}
-	done := 0
+	total := already + todoOCR
+	done := already
 
 	for i, s := range req.Slides {
-		out[i] = markdown.Slide{ID: s.ID, Name: s.Name}
 		if err := ctx.Err(); err != nil {
 			return Result{Slides: out}, err
+		}
+		if !s.Included {
+			continue
+		}
+		if !ShouldProcess(s) {
+			continue
 		}
 		if imgs[i] == nil {
 			out[i].Skip = true
@@ -87,11 +132,12 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		if plan[i].Skip {
 			detail := fmt.Sprintf("дубль кадра (PDQ %d)", plan[i].Distance)
 			out[i].Skip = true
+			out[i].Text = ""
 			if req.SetStatus != nil {
 				req.SetStatus(s.ID, session.StatusSkipped, detail)
 			}
 			if req.OnProgress != nil {
-				req.OnProgress(Progress{Current: done, Total: todo, Slide: s, Message: detail})
+				req.OnProgress(Progress{Current: done, Total: total, Slide: s, Message: detail})
 			}
 			continue
 		}
@@ -101,17 +147,19 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		if req.OnProgress != nil {
 			req.OnProgress(Progress{
 				Current: done,
-				Total:   todo,
+				Total:   total,
 				Slide:   s,
 				Message: "распознавание " + s.Name,
 			})
 		}
-		store := &imageutil.AssetStore{
-			Prefix: fmt.Sprintf("slide-%03d", i+1),
-			Source: imgs[i],
-		}
-		text, err := req.Recognizer.Recognize(ctx, imgs[i], req.Prompt, req.Illustrations, store)
+		md, err := recognizeImage(ctx, req.Recognizer, imgs[i], req.Prompt, req.Illustrations, i, s)
 		if err != nil {
+			if canceled(ctx, err) {
+				if req.SetStatus != nil {
+					req.SetStatus(s.ID, session.StatusPending, "")
+				}
+				return Result{Slides: out}, err
+			}
 			if req.SetStatus != nil {
 				req.SetStatus(s.ID, session.StatusError, err.Error())
 			}
@@ -123,8 +171,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		for j := range out {
 			wasSkip[j] = out[j].Skip
 		}
-		out[i].Text = text
-		out[i].Assets = store.Items
+		out[i] = md
 		collapseTextDuplicates(out, req)
 		if out[i].Skip {
 			if req.SetStatus != nil {
@@ -136,11 +183,70 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		emitChanged(req, out, i, wasSkip)
 		done++
 		if req.OnProgress != nil {
-			req.OnProgress(Progress{Current: done, Total: todo, Slide: s, Message: "готово " + s.Name})
+			req.OnProgress(Progress{Current: done, Total: total, Slide: s, Message: "готово " + s.Name})
 		}
 	}
 
 	return Result{Slides: out}, nil
+}
+
+// RecognizeOne runs OCR for a single slide, replacing illustration crops.
+func RecognizeOne(ctx context.Context, req OneRequest) (markdown.Slide, error) {
+	if req.Recognizer == nil {
+		return markdown.Slide{}, fmt.Errorf("recognizer is nil")
+	}
+	s := req.Slide
+	if req.SetStatus != nil {
+		req.SetStatus(s.ID, session.StatusRunning, "")
+	}
+	img, err := imageutil.OpenFile(s.Path)
+	if err != nil {
+		if req.SetStatus != nil {
+			req.SetStatus(s.ID, session.StatusError, err.Error())
+		}
+		return markdown.Slide{ID: s.ID, Name: s.Name, Skip: true}, err
+	}
+	md, err := recognizeImage(ctx, req.Recognizer, img, req.Prompt, req.Illustrations, req.Index, s)
+	if err != nil {
+		if canceled(ctx, err) {
+			if req.SetStatus != nil {
+				req.SetStatus(s.ID, session.StatusPending, "")
+			}
+			return markdown.Slide{ID: s.ID, Name: s.Name}, err
+		}
+		if req.SetStatus != nil {
+			req.SetStatus(s.ID, session.StatusError, err.Error())
+		}
+		return markdown.Slide{ID: s.ID, Name: s.Name, Skip: true}, err
+	}
+	if req.SetStatus != nil {
+		req.SetStatus(s.ID, session.StatusDone, "")
+	}
+	return md, nil
+}
+
+func recognizeImage(ctx context.Context, rec Recognizer, img image.Image, prompt string, illustrations bool, index int, s session.Slide) (markdown.Slide, error) {
+	if err := ctx.Err(); err != nil {
+		return markdown.Slide{}, err
+	}
+	store := &imageutil.AssetStore{
+		Prefix: fmt.Sprintf("slide-%03d", index+1),
+		Source: img,
+	}
+	text, err := rec.Recognize(ctx, img, prompt, illustrations, store)
+	if err != nil {
+		return markdown.Slide{ID: s.ID, Name: s.Name, Skip: true}, err
+	}
+	return markdown.Slide{
+		ID:     s.ID,
+		Name:   s.Name,
+		Text:   text,
+		Assets: store.Items,
+	}, nil
+}
+
+func canceled(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) || ctx.Err() != nil
 }
 
 func emitChanged(req Request, out []markdown.Slide, current int, wasSkip []bool) {

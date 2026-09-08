@@ -7,6 +7,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -16,9 +17,10 @@ import (
 
 type previewThumb struct {
 	widget.BaseWidget
-	img   *canvas.Image
-	path  string
-	onRMB func(string)
+	img    *canvas.Image
+	onDown func()
+	onUp   func()
+	onSec  func()
 }
 
 func newPreviewThumb() *previewThumb {
@@ -34,14 +36,28 @@ func (p *previewThumb) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(p.img)
 }
 
-func (p *previewThumb) TappedSecondary(*fyne.PointEvent) {
-	if p.path == "" || p.onRMB == nil {
-		return
+func (p *previewThumb) MouseDown(e *desktop.MouseEvent) {
+	if e.Button == desktop.MouseButtonSecondary && p.onDown != nil {
+		p.onDown()
 	}
-	p.onRMB(p.path)
 }
 
-var _ fyne.SecondaryTappable = (*previewThumb)(nil)
+func (p *previewThumb) MouseUp(e *desktop.MouseEvent) {
+	if e.Button == desktop.MouseButtonSecondary && p.onUp != nil {
+		p.onUp()
+	}
+}
+
+func (p *previewThumb) TappedSecondary(*fyne.PointEvent) {
+	if p.onSec != nil {
+		p.onSec()
+	}
+}
+
+var (
+	_ desktop.Mouseable      = (*previewThumb)(nil)
+	_ fyne.SecondaryTappable = (*previewThumb)(nil)
+)
 
 type statusCell struct {
 	widget.BaseWidget
@@ -60,7 +76,7 @@ func newStatusCell() *statusCell {
 	c.check.Importance = widget.SuccessImportance
 	c.check.Hide()
 	c.box = container.NewStack(c.label, c.check)
-	c.box.Resize(fyne.NewSize(48, 72))
+	c.box.Resize(fyne.NewSize(196, 72))
 	return c
 }
 
@@ -69,7 +85,7 @@ func (c *statusCell) CreateRenderer() fyne.WidgetRenderer {
 }
 
 func (c *statusCell) MinSize() fyne.Size {
-	return fyne.NewSize(48, 72)
+	return fyne.NewSize(196, 72)
 }
 
 func (c *statusCell) set(s session.Slide, onDone func()) {
@@ -89,14 +105,20 @@ func (c *statusCell) set(s session.Slide, onDone func()) {
 
 type slideRow struct {
 	widget.BaseWidget
-	thumb  *previewThumb
-	name   *widget.Label
-	size   *widget.Label
-	status *statusCell
-	handle *dragHandle
-	up     *widget.Button
-	down   *widget.Button
-	box    *fyne.Container
+	thumb   *previewThumb
+	name    *widget.Label
+	size    *widget.Label
+	status  *statusCell
+	handle  *dragHandle
+	up      *widget.Button
+	down    *widget.Button
+	include *widget.Check
+	box     *fyne.Container
+	index   int
+	path    string
+	onDown  func(int)
+	onUp    func()
+	onSec   func(int, string)
 }
 
 func newSlideRow() *slideRow {
@@ -111,9 +133,10 @@ func newSlideRow() *slideRow {
 	r.handle = newDragHandle()
 	r.up = widget.NewButtonWithIcon("", theme.MoveUpIcon(), nil)
 	r.down = widget.NewButtonWithIcon("", theme.MoveDownIcon(), nil)
+	r.include = widget.NewCheck("", nil)
 	r.box = container.NewBorder(
 		nil, nil, r.thumb,
-		container.NewHBox(r.status, r.handle, r.up, r.down),
+		container.NewHBox(r.status, r.handle, r.up, r.down, r.include),
 		container.NewVBox(r.name, r.size),
 	)
 	return r
@@ -122,6 +145,29 @@ func newSlideRow() *slideRow {
 func (r *slideRow) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(r.box)
 }
+
+func (r *slideRow) MouseDown(e *desktop.MouseEvent) {
+	if e.Button == desktop.MouseButtonSecondary && r.onDown != nil {
+		r.onDown(r.index)
+	}
+}
+
+func (r *slideRow) MouseUp(e *desktop.MouseEvent) {
+	if e.Button == desktop.MouseButtonSecondary && r.onUp != nil {
+		r.onUp()
+	}
+}
+
+func (r *slideRow) TappedSecondary(*fyne.PointEvent) {
+	if r.onSec != nil {
+		r.onSec(r.index, r.path)
+	}
+}
+
+var (
+	_ desktop.Mouseable      = (*slideRow)(nil)
+	_ fyne.SecondaryTappable = (*slideRow)(nil)
+)
 
 func (u *App) buildList() *widget.List {
 	return widget.NewList(
@@ -137,8 +183,22 @@ func (u *App) buildList() *widget.List {
 			row.size.SetText(formatFileSize(s.Size))
 			slideID := s.ID
 			row.status.set(s, func() { u.jumpToOutput(slideID) })
-			row.thumb.path = s.Path
-			row.thumb.onRMB = u.showImagePreview
+			row.path = s.Path
+			row.index = id
+			row.onDown = u.beginHover
+			row.onUp = u.endHover
+			row.onSec = u.handleRowSecondary
+			row.thumb.onDown = func() { u.beginHover(id) }
+			row.thumb.onUp = u.endHover
+			row.thumb.onSec = func() { u.handleRowSecondary(id, s.Path) }
+			row.include.OnChanged = nil
+			row.include.SetChecked(s.Included)
+			row.include.OnChanged = func(on bool) { u.setIncluded(slideID, on) }
+			if u.running {
+				row.include.Disable()
+			} else {
+				row.include.Enable()
+			}
 			if s.Thumb != nil {
 				row.thumb.img.Image = s.Thumb
 				row.thumb.img.Resource = nil

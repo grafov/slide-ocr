@@ -17,7 +17,9 @@ const (
 	MaxLLMSide = 2048
 	// MaxPreviewSide is the longest edge of the right-click preview dialog.
 	MaxPreviewSide = 1600
-	jpegQual       = 85
+	// MaxHoverSide is the longest edge of the RMB-hold hover card.
+	MaxHoverSide = 640
+	jpegQual     = 85
 )
 
 var imageExt = map[string]struct{}{
@@ -47,11 +49,20 @@ func ThumbnailFile(path string, size int) (image.Image, error) {
 
 // FitForPreview downscales a large image for the on-screen preview dialog.
 func FitForPreview(img image.Image) image.Image {
+	return fitMax(img, MaxPreviewSide)
+}
+
+// FitForHover downscales a slide for the RMB-hold hover card.
+func FitForHover(img image.Image) image.Image {
+	return fitMax(img, MaxHoverSide)
+}
+
+func fitMax(img image.Image, maxSide int) image.Image {
 	b := img.Bounds()
-	if b.Dx() <= MaxPreviewSide && b.Dy() <= MaxPreviewSide {
+	if b.Dx() <= maxSide && b.Dy() <= maxSide {
 		return img
 	}
-	return imaging.Fit(img, MaxPreviewSide, MaxPreviewSide, imaging.Lanczos)
+	return imaging.Fit(img, maxSide, maxSide, imaging.Lanczos)
 }
 
 // PrepareForLLM resizes large slides and encodes JPEG bytes for a data URI.

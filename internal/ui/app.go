@@ -4,8 +4,10 @@ package ui
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
@@ -59,7 +61,7 @@ type App struct {
 	status      *widget.Label
 	progress    *widget.ProgressBar
 	startBtn    *widget.Button
-	stopBtn     *widget.Button
+	pauseBtn    *widget.Button
 	promptBox   *widget.Entry
 	promptDirty bool
 	rebuilding  bool
@@ -90,10 +92,19 @@ type App struct {
 	showFragments bool
 	outBody       *fyne.Container
 
-	tabs    *container.AppTabs
-	running bool
-	cancel  context.CancelFunc
-	result  []markdown.Slide
+	tabs       *container.AppTabs
+	running    bool
+	cancel     context.CancelFunc
+	result     []markdown.Slide
+	saved      map[string]bool
+	hoverHeld  bool
+	hoverStart int
+	hoverLast  int
+	hoverCard  fyne.CanvasObject
+	hoverLayer *hoverLayer
+	hoverImg   *canvas.Image
+	hoverLabel *widget.Label
+	hoverGen   atomic.Uint64
 }
 
 // New constructs the tabbed UI.
@@ -105,12 +116,17 @@ func New(a fyne.App, win fyne.Window) *App {
 		status:        widget.NewLabel("Добавьте изображения слайдов."),
 		progress:      widget.NewProgressBar(),
 		showFragments: true,
+		saved:         map[string]bool{},
+		hoverStart:    -1,
+		hoverLast:     -1,
 	}
 	u.status.Truncation = fyne.TextTruncateEllipsis
 	u.progress.Min = 0
 	u.progress.Max = 1
 	u.buildRecognizeControls()
 	u.list = u.buildList()
+	u.list.OnHighlighted = u.onListHighlighted
+	u.buildHoverCard()
 	u.outPreview = widget.NewMultiLineEntry()
 	u.outPreview.Wrapping = fyne.TextWrapWord
 	u.outMode = widget.NewRadioGroup([]string{outContinuous, outSeparator, outSeparate}, nil)
@@ -128,7 +144,8 @@ func New(a fyne.App, win fyne.Window) *App {
 		container.NewTabItem("Вывод", outTab),
 	)
 	chrome := container.NewVBox(u.progress, u.status)
-	u.root = container.NewBorder(nil, chrome, nil, nil, u.tabs)
+	main := container.NewBorder(nil, chrome, nil, nil, u.tabs)
+	u.root = container.NewStack(main, u.hoverLayer)
 	win.SetOnDropped(func(_ fyne.Position, uris []fyne.URI) {
 		paths := make([]string, 0, len(uris))
 		for _, uri := range uris {
