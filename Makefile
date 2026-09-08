@@ -1,25 +1,19 @@
 ##
-# Project Name
+# slide-ocr — desktop GUI for lecture-slide OCR
 #
 # @file
 # @version 0.1
 
-# Go Makefile
-
-# Variables
-PRJ=project_name
+PRJ=slide-ocr
+APP=slide-ocr
 BINDIR=build
 
 PREFIX?=/usr/local/bin
 
-# Replace it with "sudo", "doas" or somethat, that allows root privileges on your
-# system.
-# SUDO=sudo
 SUDO?=
 
-# Version information
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0-dev")
-COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+COMMIT := $(shell git describe --always --dirty 2>/dev/null || echo "unknown")
 FLAGS := -buildvcs=false -ldflags "-X main.version=$(VERSION) -X main.gitCommit=$(COMMIT)"
 
 .PHONY: all
@@ -27,11 +21,8 @@ all: build
 
 .PHONY: build
 build:
+	mkdir -p $(BINDIR)
 	$(foreach dir,$(wildcard cmd/*), echo "$(dir) building..."; go build $(FLAGS) -o $(BINDIR)/ ./$(dir);)
-
-.PHONY: docker-build
-docker-build: # just set token into GITHUB_TOKEN environment variable
-	docker build -f Dockerfile -t local:$(PRJ) --secret id=github_token,env=GITHUB_TOKEN .
 
 .PHONY: test
 test:
@@ -47,11 +38,15 @@ run-log: tidy build
 
 .PHONY: run-race
 run-race: tidy
-	go run -race $(LDFLAGS) ./cmd/$(APP)
+	go run -race $(FLAGS) ./cmd/$(APP)
 
 .PHONY: lint
 lint:
 	go tool golangci-lint run ./...
+
+.PHONY: lint-fix
+lint-fix:
+	go tool golangci-lint run --fix ./...
 
 .PHONY: tidy
 tidy:
