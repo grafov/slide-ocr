@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/grafov/slide-ocr/internal/imageutil"
 	"github.com/grafov/slide-ocr/internal/markdown"
+	"github.com/grafov/slide-ocr/internal/pipeline"
 	"github.com/grafov/slide-ocr/internal/session"
 )
 
@@ -94,19 +96,23 @@ type App struct {
 	showFragments bool
 	outBody       *fyne.Container
 
-	tabs       *container.AppTabs
-	running    bool
-	cancel     context.CancelFunc
-	result     []markdown.Slide
-	saved      map[string]bool
-	hoverHeld  bool
-	hoverStart int
-	hoverLast  int
-	hoverCard  fyne.CanvasObject
-	hoverLayer *hoverLayer
-	hoverImg   *canvas.Image
-	hoverLabel *widget.Label
-	hoverGen   atomic.Uint64
+	tabs        *container.AppTabs
+	running     bool
+	batchRun    bool
+	cancel      context.CancelFunc
+	runStarted  time.Time
+	runProg     pipeline.Progress
+	runTickStop chan struct{}
+	result      []markdown.Slide
+	saved       map[string]bool
+	hoverHeld   bool
+	hoverStart  int
+	hoverLast   int
+	hoverCard   fyne.CanvasObject
+	hoverLayer  *hoverLayer
+	hoverImg    *canvas.Image
+	hoverLabel  *widget.Label
+	hoverGen    atomic.Uint64
 }
 
 // New constructs the tabbed UI.
@@ -172,6 +178,9 @@ func (u *App) setStatus(s string) {
 func (u *App) refreshList() {
 	if u.list != nil {
 		u.list.Refresh()
+	}
+	if u.running {
+		return
 	}
 	n := u.doc.Len()
 	u.setStatus(fmt.Sprintf("Файлов: %d", n))

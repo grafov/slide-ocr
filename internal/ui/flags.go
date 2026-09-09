@@ -12,7 +12,7 @@ func shouldOpenDialog(startID, lastID int) bool {
 
 func hasUnsaved(slides []markdown.Slide, saved map[string]bool) bool {
 	for _, s := range slides {
-		if s.Skip || strings.TrimSpace(s.Text) == "" {
+		if !slideInOutput(s) {
 			continue
 		}
 		if !saved[s.ID] {
@@ -20,4 +20,14 @@ func hasUnsaved(slides []markdown.Slide, saved map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+func slideInOutput(s markdown.Slide) bool {
+	if s.Skip {
+		return false
+	}
+	if s.NoText {
+		return true
+	}
+	return strings.TrimSpace(s.Text) != ""
 }

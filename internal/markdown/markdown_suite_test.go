@@ -31,6 +31,15 @@ var _ = Describe("Stitch", func() {
 	It("inserts a separator", func() {
 		Expect(markdown.Stitch(slides, markdown.ModeSeparator)).To(ContainSubstring("-----\n"))
 	})
+
+	It("keeps a NoText slot as an empty string", func() {
+		got := markdown.Stitch([]markdown.Slide{
+			{Name: "a.png", Text: "# One"},
+			{Name: "b.png", NoText: true, Text: ""},
+			{Name: "c.png", Text: "# Two"},
+		}, markdown.ModeContinuous)
+		Expect(got).To(Equal("# One\n\n\n\n# Two\n"))
+	})
 })
 
 var _ = Describe("OrderByIDs", func() {
@@ -108,5 +117,20 @@ var _ = Describe("SaveToDir", func() {
 
 	It("rejects an empty directory", func() {
 		Expect(markdown.SaveToDir(nil, markdown.ModeContinuous, "  ")).NotTo(Succeed())
+	})
+
+	It("writes an empty markdown file for a NoText slide", func() {
+		dir := GinkgoT().TempDir()
+		slides := []markdown.Slide{
+			{Name: "empty.png", NoText: true, Text: ""},
+			{Name: "ok.png", Text: "# Two"},
+		}
+		Expect(markdown.SaveToDir(slides, markdown.ModeSeparateFiles, dir)).To(Succeed())
+		emptyPath := filepath.Join(dir, "empty.md")
+		Expect(emptyPath).To(BeAnExistingFile())
+		body, err := os.ReadFile(emptyPath)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(body)).To(Equal("\n"))
+		Expect(filepath.Join(dir, "ok.md")).To(BeAnExistingFile())
 	})
 })

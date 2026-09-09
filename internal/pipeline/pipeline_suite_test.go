@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -230,20 +231,54 @@ var _ = Describe("Run", func() {
 		dir := GinkgoT().TempDir()
 		p1 := filepath.Join(dir, "a.png")
 		Expect(imaging.Save(patterned(0), p1)).To(Succeed())
+		doc := &session.Document{}
+		Expect(doc.AddPaths([]string{p1})).To(Equal(1))
+		s, _ := doc.At(0)
 		rec := &emptyRec{}
 		res, err := pipeline.Run(context.Background(), pipeline.Request{
-			Slides: []session.Slide{
-				{ID: "1", Path: p1, Name: "a.png", Included: true},
-			},
+			Snapshot:      doc.Snapshot,
 			Prompt:        "x",
 			EmptyAsImages: true,
 			PDQThreshold:  0,
 			Recognizer:    rec,
+			SetStatus:     doc.SetStatus,
+			OnSlide: func(md markdown.Slide) {
+				if md.NoText {
+					doc.MarkNoText(md.ID, md.Text)
+				}
+			},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res.Slides[0].NoText).To(BeTrue())
 		Expect(res.Slides[0].Text).To(ContainSubstring("![Нет текста]"))
 		Expect(res.Slides[0].Assets).NotTo(BeEmpty())
+		got, ok := doc.At(0)
+		Expect(ok).To(BeTrue())
+		Expect(got.ID).To(Equal(s.ID))
+		Expect(got.Included).To(BeTrue())
+		Expect(got.Status).To(Equal(session.StatusNoText))
+	})
+
+	It("records OCR duration after a VLM call", func() {
+		dir := GinkgoT().TempDir()
+		p1 := filepath.Join(dir, "a.png")
+		Expect(imaging.Save(patterned(0), p1)).To(Succeed())
+		rec := &delayRec{delay: 20 * time.Millisecond}
+		var got time.Duration
+		res, err := pipeline.Run(context.Background(), pipeline.Request{
+			Slides: []session.Slide{
+				{ID: "1", Path: p1, Name: "a.png", Included: true},
+			},
+			Prompt:       "x",
+			PDQThreshold: 0,
+			Recognizer:   rec,
+			SetDuration: func(_ string, d time.Duration) {
+				got = d
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.Slides[0].Text).To(ContainSubstring("заголовок"))
+		Expect(got).To(BeNumerically(">=", 20*time.Millisecond))
 	})
 })
 
@@ -309,6 +344,16 @@ type emptyRec struct{}
 
 func (emptyRec) Recognize(_ context.Context, _ image.Image, _ string, _ bool, _ *imageutil.AssetStore) (string, error) {
 	return "   ", nil
+}
+
+type delayRec struct {
+	delay time.Duration
+	stub  stubRec
+}
+
+func (d *delayRec) Recognize(ctx context.Context, img image.Image, prompt string, illust bool, store *imageutil.AssetStore) (string, error) {
+	time.Sleep(d.delay)
+	return d.stub.Recognize(ctx, img, prompt, illust, store)
 }
 
 func patterned(kind int) *image.NRGBA {

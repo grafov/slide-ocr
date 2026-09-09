@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
@@ -52,10 +53,15 @@ func (u *App) start() {
 	}
 	u.ensureResultSlots(slides)
 	u.setFragmentsView(true)
-	u.refreshList()
 	u.running = true
+	u.batchRun = true
+	u.runStarted = time.Now()
+	u.runProg = pipeline.Progress{}
 	u.startBtn.Disable()
 	u.pauseBtn.Enable()
+	u.refreshList()
+	u.startRunTicker()
+	u.updateRunChrome()
 	ctx, cancel := context.WithCancel(context.Background())
 	u.cancel = cancel
 	client := llm.New(cfg)
@@ -73,15 +79,20 @@ func (u *App) start() {
 				u.doc.SetStatus(id, status, detail)
 				fyne.Do(func() { u.list.Refresh() })
 			},
+			SetDuration: func(id string, d time.Duration) {
+				u.doc.SetOCRDuration(id, d)
+				fyne.Do(func() { u.list.Refresh() })
+			},
 			OnSlide: func(s markdown.Slide) {
 				fyne.Do(func() { u.applySlide(s) })
 			},
 			OnProgress: func(p pipeline.Progress) {
 				fyne.Do(func() {
+					u.runProg = p
 					if p.Total > 0 {
 						u.progress.SetValue(float64(p.Current) / float64(p.Total))
 					}
-					u.setStatus(p.Message)
+					u.updateRunChrome()
 				})
 			},
 		})
@@ -97,8 +108,56 @@ func (u *App) pause() {
 	}
 }
 
+func (u *App) updateRunChrome() {
+	if !u.running {
+		return
+	}
+	elapsed := time.Since(u.runStarted)
+	current, total := u.runProg.Current, u.runProg.Total
+	if !u.batchRun {
+		current, total = 0, 0
+	}
+	u.setStatus(formatRunLine(u.runProg.Message, elapsed, current, total, false, false))
+	if u.list != nil {
+		u.list.Refresh()
+	}
+}
+
+func (u *App) startRunTicker() {
+	u.stopRunTicker()
+	stop := make(chan struct{})
+	u.runTickStop = stop
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				fyne.Do(func() {
+					if u.running {
+						u.updateRunChrome()
+					}
+				})
+			}
+		}
+	}()
+}
+
+func (u *App) stopRunTicker() {
+	if u.runTickStop == nil {
+		return
+	}
+	close(u.runTickStop)
+	u.runTickStop = nil
+}
+
 func (u *App) finishRun(res pipeline.Result, err error) {
+	elapsed := time.Since(u.runStarted)
+	u.stopRunTicker()
 	u.running = false
+	u.batchRun = false
 	u.startBtn.Enable()
 	u.pauseBtn.Disable()
 	u.cancel = nil
@@ -109,12 +168,12 @@ func (u *App) finishRun(res pipeline.Result, err error) {
 		return
 	}
 	if errors.Is(err, context.Canceled) {
-		u.setStatus("пауза")
+		u.setStatus(formatRunLine("", elapsed, 0, 0, true, false))
 		u.list.Refresh()
 		return
 	}
 	u.progress.SetValue(1)
-	u.setStatus(fmt.Sprintf("готово, слайдов в выводе: %d", counted(u.result)))
+	u.setStatus(formatRunLine(fmt.Sprintf("готово, слайдов в выводе: %d", counted(u.result)), elapsed, 0, 0, false, true))
 	if len(u.tabs.Items) > 2 {
 		u.tabs.SelectIndex(2)
 	}
@@ -136,7 +195,7 @@ func (u *App) ensureResultSlots(slides []session.Slide) {
 func counted(slides []markdown.Slide) int {
 	n := 0
 	for _, s := range slides {
-		if !s.Skip && strings.TrimSpace(s.Text) != "" {
+		if slideInOutput(s) {
 			n++
 		}
 	}
@@ -174,7 +233,7 @@ func (u *App) writeOutput() error {
 		return err
 	}
 	for _, s := range slides {
-		if !s.Skip && strings.TrimSpace(s.Text) != "" {
+		if slideInOutput(s) {
 			u.saved[s.ID] = true
 		}
 	}
@@ -207,8 +266,13 @@ func (u *App) rerecognize(id string) {
 		promptText = u.promptBox.Text
 	}
 	u.running = true
+	u.batchRun = false
+	u.runStarted = time.Now()
+	u.runProg = pipeline.Progress{Message: "распознавание " + s.Name, Total: 1}
 	u.startBtn.Disable()
 	u.pauseBtn.Enable()
+	u.startRunTicker()
+	u.updateRunChrome()
 	ctx, cancel := context.WithCancel(context.Background())
 	u.cancel = cancel
 	client := llm.New(cfg)
@@ -226,8 +290,14 @@ func (u *App) rerecognize(id string) {
 				u.doc.SetStatus(sid, status, detail)
 				fyne.Do(func() { u.list.Refresh() })
 			},
+			SetDuration: func(sid string, d time.Duration) {
+				u.doc.SetOCRDuration(sid, d)
+				fyne.Do(func() { u.list.Refresh() })
+			},
 		})
 		fyne.Do(func() {
+			elapsed := time.Since(u.runStarted)
+			u.stopRunTicker()
 			u.running = false
 			u.startBtn.Enable()
 			u.pauseBtn.Disable()
@@ -237,11 +307,15 @@ func (u *App) rerecognize(id string) {
 				return
 			}
 			if errors.Is(err, context.Canceled) {
-				u.setStatus("пауза")
+				u.setStatus(formatRunLine("", elapsed, 0, 0, true, false))
 				return
 			}
 			u.applySlide(md)
-			u.setStatus("заново: " + s.Name)
+			dur := time.Duration(0)
+			if sl, ok := u.doc.At(idx); ok {
+				dur = sl.OCRDuration
+			}
+			u.setStatus("заново: " + s.Name + " · " + formatOCRDuration(dur))
 		})
 	}()
 }

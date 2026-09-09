@@ -38,16 +38,18 @@ const (
 
 // Slide is one image in the current batch.
 type Slide struct {
-	ID       string
-	Path     string
-	Name     string
-	Size     int64
-	ModTime  time.Time
-	Thumb    image.Image
-	Status   Status
-	Detail   string
-	Text     string
-	Included bool
+	ID          string
+	Path        string
+	Name        string
+	Size        int64
+	ModTime     time.Time
+	Thumb       image.Image
+	Status      Status
+	Detail      string
+	Text        string
+	Included    bool
+	OCRStarted  time.Time
+	OCRDuration time.Duration
 }
 
 // Document is the shared, mutex-protected batch used by all tabs.
@@ -202,9 +204,25 @@ func (d *Document) SetStatus(id string, status Status, detail string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for i := range d.slides {
+		if d.slides[i].ID != id {
+			continue
+		}
+		d.slides[i].Status = status
+		d.slides[i].Detail = detail
+		if status == StatusRunning {
+			d.slides[i].OCRStarted = time.Now()
+		}
+		return
+	}
+}
+
+// SetOCRDuration stores how long the last VLM call for this slide took.
+func (d *Document) SetOCRDuration(id string, dur time.Duration) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := range d.slides {
 		if d.slides[i].ID == id {
-			d.slides[i].Status = status
-			d.slides[i].Detail = detail
+			d.slides[i].OCRDuration = dur
 			return
 		}
 	}
@@ -247,7 +265,7 @@ func (d *Document) SetIncluded(id string, included bool) {
 	}
 }
 
-// MarkNoText marks a slide as empty OCR: yellow status, dropped from the work queue.
+// MarkNoText marks a slide as empty OCR: yellow status, still in the work list.
 func (d *Document) MarkNoText(id, text string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -255,7 +273,6 @@ func (d *Document) MarkNoText(id, text string) {
 		if d.slides[i].ID != id {
 			continue
 		}
-		d.slides[i].Included = false
 		d.slides[i].Status = StatusNoText
 		d.slides[i].Detail = "Нет текста"
 		d.slides[i].Text = text
@@ -271,6 +288,8 @@ func (d *Document) ClearOutput() {
 		d.slides[i].Status = StatusPending
 		d.slides[i].Detail = ""
 		d.slides[i].Text = ""
+		d.slides[i].OCRStarted = time.Time{}
+		d.slides[i].OCRDuration = 0
 	}
 }
 

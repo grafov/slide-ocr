@@ -192,7 +192,7 @@ func (u *App) buildList() *widget.List {
 				return
 			}
 			row.name.SetText(s.Name)
-			row.size.SetText(formatFileSize(s.Size))
+			row.size.SetText(formatSlideMeta(s))
 			slideID := s.ID
 			row.status.set(s, func() { u.jumpToOutput(slideID) })
 			row.path = s.Path

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"strings"
+	"time"
 
 	"github.com/grafov/slide-ocr/internal/dedup"
 	"github.com/grafov/slide-ocr/internal/imageutil"
@@ -39,6 +40,7 @@ type Request struct {
 	OnProgress    func(Progress)
 	OnSlide       func(markdown.Slide)
 	SetStatus     func(id string, status session.Status, detail string)
+	SetDuration   func(id string, d time.Duration)
 }
 
 // OneRequest is OCR of a single slide with the current backend settings.
@@ -50,6 +52,7 @@ type OneRequest struct {
 	EmptyAsImages bool
 	Recognizer    Recognizer
 	SetStatus     func(id string, status session.Status, detail string)
+	SetDuration   func(id string, d time.Duration)
 }
 
 // Result is OCR output for stitching and saving.
@@ -214,7 +217,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 				Message: "распознавание " + s.Name,
 			})
 		}
-		md, err := recognizeImage(ctx, req.Recognizer, img, req.Prompt, req.Illustrations, req.EmptyAsImages, idx, s)
+		md, err := recognizeTimed(ctx, req.Recognizer, img, req.Prompt, req.Illustrations, req.EmptyAsImages, idx, s, req.SetDuration)
 		attempted[s.ID] = struct{}{}
 		if err != nil {
 			if canceled(ctx, err) {
@@ -227,12 +230,14 @@ func Run(ctx context.Context, req Request) (Result, error) {
 			continue
 		}
 		if md.NoText {
-			st.included[s.ID] = false
 			st.text[s.ID] = md.Text
 			st.setStatus(s.ID, session.StatusNoText, "Нет текста", req.SetStatus)
 			results[s.ID] = md
 			if req.OnSlide != nil {
 				req.OnSlide(cloneSlide(md))
+			}
+			if req.OnProgress != nil {
+				req.OnProgress(Progress{Current: doneN + 1, Total: total, Slide: s, Message: "готово " + s.Name})
 			}
 			continue
 		}
@@ -365,7 +370,7 @@ func RecognizeOne(ctx context.Context, req OneRequest) (markdown.Slide, error) {
 		}
 		return markdown.Slide{ID: s.ID, Name: s.Name, Skip: true}, err
 	}
-	md, err := recognizeImage(ctx, req.Recognizer, img, req.Prompt, req.Illustrations, req.EmptyAsImages, req.Index, s)
+	md, err := recognizeTimed(ctx, req.Recognizer, img, req.Prompt, req.Illustrations, req.EmptyAsImages, req.Index, s, req.SetDuration)
 	if err != nil {
 		if canceled(ctx, err) {
 			if req.SetStatus != nil {
@@ -388,6 +393,15 @@ func RecognizeOne(ctx context.Context, req OneRequest) (markdown.Slide, error) {
 		req.SetStatus(s.ID, session.StatusDone, "")
 	}
 	return md, nil
+}
+
+func recognizeTimed(ctx context.Context, rec Recognizer, img image.Image, prompt string, illustrations, emptyAsImages bool, index int, s session.Slide, setDuration func(string, time.Duration)) (markdown.Slide, error) {
+	t0 := time.Now()
+	md, err := recognizeImage(ctx, rec, img, prompt, illustrations, emptyAsImages, index, s)
+	if setDuration != nil {
+		setDuration(s.ID, time.Since(t0))
+	}
+	return md, err
 }
 
 func recognizeImage(ctx context.Context, rec Recognizer, img image.Image, prompt string, illustrations, emptyAsImages bool, index int, s session.Slide) (markdown.Slide, error) {

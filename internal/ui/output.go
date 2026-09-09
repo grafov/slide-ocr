@@ -200,6 +200,9 @@ func (u *App) rebuildFragments() {
 }
 
 func showFragment(sl session.Slide, md markdown.Slide, ok bool) bool {
+	if !sl.Included {
+		return false
+	}
 	if sl.Status == session.StatusSkipped {
 		return false
 	}
@@ -209,7 +212,7 @@ func showFragment(sl session.Slide, md markdown.Slide, ok bool) bool {
 	if !ok || md.Skip || strings.TrimSpace(md.Text) == "" {
 		return false
 	}
-	return sl.Included
+	return true
 }
 
 func (u *App) newFragmentRow(s markdown.Slide, index, n int) fyne.CanvasObject {
@@ -244,9 +247,6 @@ func (u *App) newFragmentRow(s markdown.Slide, index, n int) fyne.CanvasObject {
 	body.SetText(s.Text)
 	body.SetMinRowsVisible(fragmentMinRows(s.Text))
 	body.Disable()
-	if strings.TrimSpace(s.Text) == "" {
-		body.Hide()
-	}
 	return container.NewBorder(head, nil, nil, nil, body)
 }
 

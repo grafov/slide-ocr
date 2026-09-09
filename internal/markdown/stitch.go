@@ -43,7 +43,7 @@ type Slide struct {
 func Stitch(slides []Slide, mode Mode) string {
 	var parts []string
 	for _, s := range slides {
-		if s.Skip || strings.TrimSpace(s.Text) == "" {
+		if !keepSlide(s) {
 			continue
 		}
 		parts = append(parts, strings.TrimSpace(s.Text))
@@ -100,7 +100,7 @@ func saveSeparate(slides []Slide, dir string) error {
 	assetDir := filepath.Join(dir, "assets")
 	used := make(map[string]int)
 	for _, s := range slides {
-		if s.Skip || strings.TrimSpace(s.Text) == "" {
+		if !keepSlide(s) {
 			continue
 		}
 		name := uniqueMarkdownName(used, s.Name)
@@ -111,6 +111,16 @@ func saveSeparate(slides []Slide, dir string) error {
 		}
 	}
 	return writeAssets(slides, assetDir)
+}
+
+func keepSlide(s Slide) bool {
+	if s.Skip {
+		return false
+	}
+	if s.NoText {
+		return true
+	}
+	return strings.TrimSpace(s.Text) != ""
 }
 
 func uniqueMarkdownName(used map[string]int, name string) string {
