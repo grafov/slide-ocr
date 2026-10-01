@@ -21,25 +21,33 @@ import (
 )
 
 const (
-	prefURL     = "backend.url"
-	prefKey     = "backend.apikey"
-	prefModel   = "backend.model"
-	prefReason  = "backend.reasoning"
-	prefEffort  = "backend.effort"
-	prefTemp    = "backend.temperature"
-	prefTokens  = "backend.maxtokens"
-	prefRU      = "lang.ru"
-	prefEN      = "lang.en"
-	prefExtra   = "lang.extra"
-	prefIllust  = "opt.illustrations"
-	prefEmptyAs = "opt.emptyasimages"
-	prefTables  = "opt.tables"
-	prefStyles  = "opt.styles"
-	prefFrag    = "opt.fragments"
-	prefOutMode = "output.mode"
-	prefOutDir  = "output.dir"
+	prefURL      = "backend.url"
+	prefKey      = "backend.apikey"
+	prefModel    = "backend.model"
+	prefReason   = "backend.reasoning"
+	prefEffort   = "backend.effort"
+	prefTemp     = "backend.temperature"
+	prefTokens   = "backend.maxtokens"
+	prefRU       = "lang.ru"
+	prefEN       = "lang.en"
+	prefExtra    = "lang.extra"
+	prefIllust   = "opt.illustrations"
+	prefEmptyAs  = "opt.emptyasimages"
+	prefTables   = "opt.tables"
+	prefStyles   = "opt.styles"
+	prefFrag     = "opt.fragments"
+	prefOutMode  = "output.mode"
+	prefOutDir   = "output.dir"
+	prefProfiles = "backend.profiles"
 
-	defaultURL = "http://127.0.0.1:1234/v1"
+	defaultURL    = "http://127.0.0.1:1234/v1"
+	defaultEffort = effortMedium
+	defaultTemp   = "0.2"
+	defaultTokens = "4096"
+
+	effortLow    = "low"
+	effortMedium = "medium"
+	effortHigh   = "high"
 )
 
 const (
@@ -68,6 +76,13 @@ type App struct {
 	promptBox   *widget.Entry
 	promptDirty bool
 	rebuilding  bool
+
+	profiles    profileSet
+	profileBox  *fyne.Container
+	backendForm fyne.CanvasObject
+	nameEntry   *widget.Entry
+	activeCheck *widget.Check
+	profileLock bool
 
 	urlEntry       *widget.Entry
 	keyEntry       *widget.Entry
