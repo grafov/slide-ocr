@@ -86,6 +86,26 @@ var _ = Describe("Save", func() {
 	})
 })
 
+var _ = Describe("MarkdownStems", func() {
+	It("uses recognized-text for combined modes", func() {
+		slides := []markdown.Slide{{Name: "a.png", Text: "# One"}}
+		Expect(markdown.MarkdownStems(slides, markdown.ModeContinuous)).To(Equal([]string{"recognized-text"}))
+		Expect(markdown.MarkdownStems(slides, markdown.ModeSeparator)).To(Equal([]string{"recognized-text"}))
+		Expect(markdown.MarkdownStems(nil, markdown.ModeContinuous)).To(Equal([]string{"recognized-text"}))
+	})
+
+	It("names separate files like SaveToDir and skips omitted slides", func() {
+		slides := []markdown.Slide{
+			{Name: "shot.png", Text: "one"},
+			{Name: "skip.png", Text: "no", Skip: true},
+			{Name: "shot.jpg", Text: "two"},
+			{Name: "blank.png", Text: "  "},
+			{Name: "other.png", Text: "three"},
+		}
+		Expect(markdown.MarkdownStems(slides, markdown.ModeSeparateFiles)).To(Equal([]string{"shot", "shot-2", "other"}))
+	})
+})
+
 var _ = Describe("SaveToDir", func() {
 	It("writes recognized-text.md for continuous mode", func() {
 		dir := GinkgoT().TempDir()
@@ -113,6 +133,9 @@ var _ = Describe("SaveToDir", func() {
 		Expect(filepath.Join(dir, "shot-2.md")).To(BeAnExistingFile())
 		Expect(filepath.Join(dir, "other.md")).To(BeAnExistingFile())
 		Expect(filepath.Join(dir, "001-shot.md")).NotTo(BeAnExistingFile())
+		for _, stem := range markdown.MarkdownStems(slides, markdown.ModeSeparateFiles) {
+			Expect(filepath.Join(dir, stem+".md")).To(BeAnExistingFile())
+		}
 	})
 
 	It("rejects an empty directory", func() {

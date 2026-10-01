@@ -91,7 +91,6 @@ func (u *App) recognizeTab() fyne.CanvasObject {
 		u.startBtn,
 		u.pauseBtn,
 	)
-	browseDir := widget.NewButtonWithIcon("Выбрать папку…", theme.FolderOpenIcon(), u.pickSaveDir)
 	u.backendForm = widget.NewForm(
 		widget.NewFormItem("Имя", u.nameEntry),
 		widget.NewFormItem("URL", u.urlEntry),
@@ -104,7 +103,6 @@ func (u *App) recognizeTab() fyne.CanvasObject {
 	shared := widget.NewForm(
 		widget.NewFormItem("Языки", container.NewVBox(container.NewHBox(u.langRU, u.langEN), u.langExtra)),
 		widget.NewFormItem("Опции", container.NewVBox(u.optIllust, u.optEmptyIllust, u.optTables, u.optStyles, u.optFrag)),
-		widget.NewFormItem("Папка сохранения", container.NewBorder(nil, nil, nil, browseDir, u.outDirEntry)),
 	)
 	addBtn := widget.NewButton("Добавить профиль", u.addProfile)
 	u.profileBox = container.NewVBox()
@@ -206,6 +204,11 @@ func (u *App) loadPrefs() {
 	u.optStyles.SetChecked(p.BoolWithFallback(prefStyles, true))
 	u.optFrag.SetChecked(p.BoolWithFallback(prefFrag, false))
 	u.outDirEntry.SetText(p.String(prefOutDir))
+	cmd := p.String(prefExportCmd)
+	if strings.TrimSpace(cmd) == "" {
+		cmd = defaultExportCmd
+	}
+	u.exportEntry.SetText(cmd)
 }
 
 func (u *App) savePrefs() {
@@ -224,6 +227,7 @@ func (u *App) savePrefs() {
 	p.SetBool(prefFrag, u.optFrag.Checked)
 	p.SetString(prefOutMode, u.outMode.Selected)
 	p.SetString(prefOutDir, u.outDirEntry.Text)
+	p.SetString(prefExportCmd, u.exportEntry.Text)
 }
 
 func (u *App) flushActive() {

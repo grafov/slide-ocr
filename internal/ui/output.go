@@ -29,7 +29,12 @@ func (u *App) outputTab() fyne.CanvasObject {
 	u.fragScroll = container.NewVScroll(u.fragBox)
 	u.outPreview.Hide()
 	u.outBody = container.NewStack(u.fragScroll, u.outPreview)
-	top := container.NewVBox(container.NewHBox(save, clearBtn, u.outToggle), u.outMode)
+	browseDir := widget.NewButtonWithIcon("Выбрать папку…", theme.FolderOpenIcon(), u.pickSaveDir)
+	dirRow := container.NewBorder(nil, nil, widget.NewLabel("Папка сохранения"), browseDir, u.outDirEntry)
+	u.exportEntry = widget.NewEntry()
+	u.exportBtn = widget.NewButton("Экспорт", u.exportOutput)
+	exportRow := container.NewBorder(nil, nil, u.exportBtn, nil, u.exportEntry)
+	top := container.NewVBox(dirRow, exportRow, container.NewHBox(save, clearBtn, u.outToggle), u.outMode)
 	return container.NewBorder(top, nil, nil, nil, u.outBody)
 }
 

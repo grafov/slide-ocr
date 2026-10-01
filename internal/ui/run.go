@@ -222,7 +222,7 @@ func (u *App) saveOutput() {
 func (u *App) writeOutput() error {
 	dir := strings.TrimSpace(u.outDirEntry.Text)
 	if dir == "" {
-		return errors.New("выберите папку сохранения на вкладке Распознавание")
+		return errors.New("выберите папку сохранения")
 	}
 	slides := append([]markdown.Slide(nil), u.orderedResult()...)
 	if counted(slides) == 0 {

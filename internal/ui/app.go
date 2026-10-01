@@ -21,29 +21,31 @@ import (
 )
 
 const (
-	prefURL      = "backend.url"
-	prefKey      = "backend.apikey"
-	prefModel    = "backend.model"
-	prefReason   = "backend.reasoning"
-	prefEffort   = "backend.effort"
-	prefTemp     = "backend.temperature"
-	prefTokens   = "backend.maxtokens"
-	prefRU       = "lang.ru"
-	prefEN       = "lang.en"
-	prefExtra    = "lang.extra"
-	prefIllust   = "opt.illustrations"
-	prefEmptyAs  = "opt.emptyasimages"
-	prefTables   = "opt.tables"
-	prefStyles   = "opt.styles"
-	prefFrag     = "opt.fragments"
-	prefOutMode  = "output.mode"
-	prefOutDir   = "output.dir"
-	prefProfiles = "backend.profiles"
+	prefURL       = "backend.url"
+	prefKey       = "backend.apikey"
+	prefModel     = "backend.model"
+	prefReason    = "backend.reasoning"
+	prefEffort    = "backend.effort"
+	prefTemp      = "backend.temperature"
+	prefTokens    = "backend.maxtokens"
+	prefRU        = "lang.ru"
+	prefEN        = "lang.en"
+	prefExtra     = "lang.extra"
+	prefIllust    = "opt.illustrations"
+	prefEmptyAs   = "opt.emptyasimages"
+	prefTables    = "opt.tables"
+	prefStyles    = "opt.styles"
+	prefFrag      = "opt.fragments"
+	prefOutMode   = "output.mode"
+	prefOutDir    = "output.dir"
+	prefExportCmd = "output.exportcmd"
+	prefProfiles  = "backend.profiles"
 
-	defaultURL    = "http://127.0.0.1:1234/v1"
-	defaultEffort = effortMedium
-	defaultTemp   = "0.2"
-	defaultTokens = "4096"
+	defaultURL       = "http://127.0.0.1:1234/v1"
+	defaultEffort    = effortMedium
+	defaultTemp      = "0.2"
+	defaultTokens    = "4096"
+	defaultExportCmd = `$ pandoc -i %s.md -o %s.pdf --pdf-engine xelatex -V mainfont="Liberation Serif"`
 
 	effortLow    = "low"
 	effortMedium = "medium"
@@ -101,6 +103,8 @@ type App struct {
 	optStyles      *widget.Check
 	optFrag        *widget.Check
 	outDirEntry    *widget.Entry
+	exportEntry    *widget.Entry
+	exportBtn      *widget.Button
 
 	outMode       *widget.RadioGroup
 	outPreview    *widget.Entry

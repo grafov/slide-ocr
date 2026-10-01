@@ -93,24 +93,64 @@ func SaveToDir(slides []Slide, mode Mode, dir string) error {
 	return Save(slides, mode, filepath.Join(dir, CombinedFileName))
 }
 
-func saveSeparate(slides []Slide, dir string) error {
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return err
+// MarkdownStems returns the base names, without a file extension, of the
+// Markdown files SaveToDir writes for slides in mode.
+//
+// Continuous and separator modes always return one stem, taken from
+// CombinedFileName ("recognized-text"), even when slides is empty: both modes
+// write a single combined document.
+// Separate-files mode returns one stem per kept slide, in input order.
+// Skipped slides and slides with no text are omitted. When two slides
+// sanitize to the same stem, later names gain a numeric suffix ("-2", "-3", …)
+// identical to the filenames written on disk.
+func MarkdownStems(slides []Slide, mode Mode) []string {
+	if mode != ModeSeparateFiles {
+		return []string{combinedStem()}
 	}
-	assetDir := filepath.Join(dir, "assets")
+	files := separateFiles(slides)
+	stems := make([]string, len(files))
+	for i, f := range files {
+		stems[i] = f.stem
+	}
+	return stems
+}
+
+func combinedStem() string {
+	return strings.TrimSuffix(CombinedFileName, filepath.Ext(CombinedFileName))
+}
+
+type separateFile struct {
+	stem string
+	body string
+}
+
+func separateFiles(slides []Slide) []separateFile {
 	used := make(map[string]int)
+	out := make([]separateFile, 0)
 	for _, s := range slides {
 		if !keepSlide(s) {
 			continue
 		}
 		name := uniqueMarkdownName(used, s.Name)
-		path := filepath.Join(dir, name)
-		text := strings.TrimSpace(s.Text) + "\n"
-		if err := imageutil.WriteFile(path, []byte(text)); err != nil {
+		out = append(out, separateFile{
+			stem: strings.TrimSuffix(name, filepath.Ext(name)),
+			body: strings.TrimSpace(s.Text) + "\n",
+		})
+	}
+	return out
+}
+
+func saveSeparate(slides []Slide, dir string) error {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	for _, f := range separateFiles(slides) {
+		path := filepath.Join(dir, f.stem+".md")
+		if err := imageutil.WriteFile(path, []byte(f.body)); err != nil {
 			return err
 		}
 	}
-	return writeAssets(slides, assetDir)
+	return writeAssets(slides, filepath.Join(dir, "assets"))
 }
 
 func keepSlide(s Slide) bool {

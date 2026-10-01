@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -61,6 +62,41 @@ var _ = Describe("formatRunLine", func() {
 		Expect(formatRunLine("распознавание b.png", 20*time.Second, 2, 6, false, false)).To(Equal("распознавание b.png · прошло 0:20 · осталось ~0:40"))
 		Expect(formatRunLine("", 90*time.Second, 0, 0, true, false)).To(Equal("пауза · прошло 1:30"))
 		Expect(formatRunLine("готово, слайдов в выводе: 3", 222*time.Second, 0, 0, false, true)).To(Equal("готово, слайдов в выводе: 3 · 3:42"))
+	})
+})
+
+var _ = Describe("expandExportCmd", func() {
+	It("strips a leading prompt and substitutes every stem placeholder", func() {
+		got, err := expandExportCmd(defaultExportCmd, "recognized-text")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(`pandoc -i recognized-text.md -o recognized-text.pdf --pdf-engine xelatex -V mainfont="Liberation Serif"`))
+	})
+
+	It("rejects a command that is only a prompt", func() {
+		_, err := expandExportCmd("  $  ", "slide")
+		Expect(err).To(MatchError("пустая команда экспорта"))
+	})
+})
+
+var _ = Describe("runExportCmd", func() {
+	It("runs in the save directory and surfaces stderr", func() {
+		dir := GinkgoT().TempDir()
+		Expect(runExportCmd(dir, "touch ok.txt")).To(Succeed())
+		Expect(filepath.Join(dir, "ok.txt")).To(BeAnExistingFile())
+		err := runExportCmd(dir, "echo fail >&2; exit 1")
+		Expect(err).To(MatchError("fail"))
+	})
+})
+
+var _ = Describe("runExportLoop", func() {
+	It("substitutes each stem and stops on the first failure", func() {
+		dir := GinkgoT().TempDir()
+		Expect(runExportLoop(dir, "touch %s.txt", []string{"a", "b"}, nil)).To(Succeed())
+		Expect(filepath.Join(dir, "a.txt")).To(BeAnExistingFile())
+		Expect(filepath.Join(dir, "b.txt")).To(BeAnExistingFile())
+		err := runExportLoop(dir, "false", []string{"a", "b"}, nil)
+		Expect(err).To(MatchError(ContainSubstring("a:")))
+		Expect(err.Error()).NotTo(ContainSubstring("b:"))
 	})
 })
 
